@@ -3,24 +3,53 @@
    flowDir — направление течения вниз по реке (0=С, 90=В, 180=Ю).
    ============================================================ */
 const HPPS = [
-  /* Новые ГТС Северного Кавказа (данные: РусГидро/Википедия + проектная таблица).
-     Гизельдонская: координаты плотины у завала Кахты-Сар; напор 289 м — деривационный.
-     Баксанская: координаты головного узла (волна от водосливной плотины). */
-  {id:'giz', name:'Гизельдонская ГЭС', river:'Гизельдон', lat:42.8785, lon:44.4503, flowDir:15,
-   capacityMW:22.8, head:289, nmu:1176, umo:1175.73, areaNMU:10.81, totalVolume:0.015, usefulVolume:0.00293,
-   eff:.85, year:1934, terrainAmpl:800, reservoirName:'Гизельдонское',
-   damType:'грунтовая каменно-набросная, 21,5 м'},
-  {id:'gun', name:'Гунибская ГЭС им. Р. Гамзатова', river:'Каракойсу', lat:42.4317, lon:46.9869, flowDir:5,
-   capacityMW:15, head:110, nmu:863.5, umo:862, areaNMU:0.6, totalVolume:0.01058, usefulVolume:0.00087,
-   eff:.93, year:2005, terrainAmpl:600, reservoirName:'Гунибское',
-   damType:'бетонная арочная с пробкой, 73,3 м'},
-  {id:'bak', name:'Баксанская ГЭС', river:'Баксан', lat:43.6056, lon:43.3056, flowDir:76,
-   capacityMW:27, head:88.53, nmu:647.2, umo:645, areaNMU:0.072, totalVolume:0.00016, usefulVolume:0.00015,
-   eff:.93, year:1936, terrainAmpl:900, reservoirName:'Баксанский БСР',
-   damType:'бетонная водосливная, ≈6 м'}
+  /* Малые ГТС Карельского перешейка (Выборгский р-н). Данные: файл пользователя
+     «Данные ГЭС.docx»; координаты плотин: OSM/Wikimapia/vokrug-ladogi.ru.
+     Поля, по которым в паспорте «нет данных», помечены «~» (рабочая оценка для модели). */
+  {id:'krav', name:'Кравцовская МГЭС', river:'Селезнёвка', lat:60.7680, lon:28.5707, flowDir:115,
+   capacityMW:0.2, powerLabel:'нет данных (~0,2 МВт)', head:2.5, nmu:10.5, umo:8, areaNMU:0.03,
+   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1943, visMinW:30, terrainAmpl:50,
+   reservoirName:'пруд Кравцовской МГЭС', damH:3, breachW:29, chanW0:8, chanW1:45,
+   damType:'IV класс, гребень 29×1 м, напор 2,5 м (82 года эксплуатации)',
+   note:'с 2025 г. идёт демонтаж старой плотины'},
+  {id:'yash', name:'Яшинская МГЭС (Вахвиала)', river:'Бусловка', lat:60.8031, lon:28.4953, flowDir:250,
+   capacityMW:1.2, powerLabel:'до 1,2 МВт', head:6, nmu:16, umo:14, areaNMU:0.03,
+   totalVolume:0.00009, usefulVolume:0.00003, eff:.85, year:1896, visMinW:35, terrainAmpl:50,
+   reservoirName:'пруд Яшинской МГЭС', damH:2, breachW:18.3, chanW0:10, chanW1:50,
+   damType:'водослив с широким порогом, 3 пролёта, высота 2 м',
+   note:'апрель 2025: объявлен тендер на снос ГТС'},
+  {id:'andr', name:'Андреевская ГЭС', river:'Андреевка (Тукалус-Йоки)', lat:60.71815, lon:28.1786, flowDir:170,
+   capacityMW:0.6, powerLabel:'0,6 МВт', head:7, nmu:99, umo:96.5, areaNMU:0.045,
+   totalVolume:0.00012, usefulVolume:0.00004, eff:.85, year:1950, visMinW:30, terrainAmpl:50,
+   reservoirName:'пруд Андреевской ГЭС', damH:2.5, breachW:20, chanW0:6, chanW1:35,
+   damType:'каменная кладка 2–3 м, деривационная',
+   note:'НПУ 99 м — условная отметка; проект реконструкции 2021 г.'},
+  {id:'pero', name:'Перовская МГЭС («Феррариа»)', river:'Перовка', lat:60.67992, lon:28.95119, flowDir:295,
+   capacityMW:0.15, powerLabel:'нет данных (~0,15 МВт)', head:5.5, nmu:17.5, umo:12, areaNMU:0.03,
+   totalVolume:0.00008, usefulVolume:0.00002, eff:.82, year:1905, visMinW:35, terrainAmpl:50,
+   reservoirName:'пруд Перовской МГЭС', damH:10, breachW:27, chanW0:10, chanW1:55,
+   damType:'двухсекционный водосброс, деревянные щиты, ≈10 м',
+   note:''},
+  {id:'igla', name:'Плотина затопления «Игла»', river:'Перовка', lat:60.52897, lon:29.16467, flowDir:315,
+   capacityMW:0, powerLabel:'не ГЭС', notHPP:true, head:3, nmu:52.5, umo:47, areaNMU:0.14,
+   totalVolume:0.0004, usefulVolume:0.0001, eff:.8, year:1938, visMinW:45, terrainAmpl:50,
+   reservoirName:'зона затопления (несколько км)', damH:5.5, breachW:60, chanW0:12, chanW1:60,
+   damType:'плотина затопления, 1938 г., тело >5 м',
+   note:'создаёт многокилометровую зону затопления'},
+  {id:'rokk', name:'Плотина хутора Роккаланмяки (руины)', river:'Птичья', lat:60.2913, lon:29.8017, flowDir:290,
+   capacityMW:0.05, powerLabel:'нет данных (лесопильня)', head:1.25, nmu:74.5, umo:73, areaNMU:0.01,
+   totalVolume:0.00002, usefulVolume:0.000005, eff:.8, year:1930, visMinW:22, terrainAmpl:80,
+   reservoirName:'пруд хутора Роккаланмяки', damH:1.5, breachW:15, chanW0:4, chanW1:25,
+   damType:'щитовая, 2–3 пролёта, один разрушен; подъём 1–1,5 м',
+   note:''},
+  {id:'alak', name:'Алакусская ГЭС', river:'Пчелинка', lat:60.6077, lon:29.5165, flowDir:335,
+   capacityMW:0.1, powerLabel:'нет данных (~0,1 МВт)', head:2, nmu:22, umo:20, areaNMU:0.04,
+   totalVolume:0.0001, usefulVolume:0.00003, eff:.83, year:1948, visMinW:32, terrainAmpl:50,
+   reservoirName:'Алакусский пруд', damH:2, breachW:25, chanW0:6, chanW1:40,
+   damType:'плотина 1948 г. (строители — студенты ЛПИ им. Калинина)',
+   note:''}
 ];
-
-const PRIORITY = ['giz', 'gun', 'bak'];
+const PRIORITY = ['krav','yash','andr','pero','igla','rokk','alak'];
 const HISTORY_START = '2023-01-01';
 const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
@@ -33,9 +62,13 @@ const CHART_THROTTLE_MS = 80;
 const WAVE_SCALE = 1.0;
 
 /* ============================================================
-   КАРТА
+   КАРТА (Leaflet)
    ============================================================ */
-const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([43.15, 44.95], 8);
+/* attributionControl выключен и добавлен вручную с prefix:false —
+   убирает префикс «🇺🇦 Leaflet», но СОХРАНЯЕТ копирайты OSM/OTM/Esri. */
+const map = L.map('map', { zoomControl:true, preferCanvas:true, attributionControl:false })
+  .setView([60.62, 28.75], 9);
+L.control.attribution({ position:'bottomright', prefix: false }).addTo(map);
 
 const baseLayers = {
   '🌍 OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -53,6 +86,47 @@ const layerRes     = L.layerGroup().addTo(map);
 const layerFloodZone = L.layerGroup().addTo(map); // зона затопления (под волной)
 const layerFlood   = L.layerGroup().addTo(map);
 const layerMarkers = L.layerGroup().addTo(map);
+
+/* хелпер полигона в стиле Leaflet-вызовов: кольцо [ [lat,lon], ... ] */
+function polyAdd(collection, ring, o){
+  try { return polyAddUnsafe(collection, ring, o); }
+  catch(e){ console.warn('polyAdd:', e.message); return null; }
+}
+function polyAddUnsafe(collection, ring, o){
+  if (!collection || !Array.isArray(ring) || ring.length < 3) return null;
+  /* замкнуть кольцо и выкинуть NaN */
+  ring = ring.filter(p => p && isFinite(p[0]) && isFinite(p[1]));
+  if (ring.length < 3) return null;
+  if (ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1]) ring = ring.concat([ring[0]]);
+  const p = L.polygon(ring, {
+    color: o.color || '#ffffff', weight: o.weight ?? 1.5, opacity: o.opacity ?? 0.9,
+    fillColor: o.fill || o.fillColor || '#000000', fillOpacity: o.fillOpacity ?? 0.3,
+    dashArray: o.dash ? '7 5' : null, interactive: false
+  });
+  p.addTo(collection);
+  return p;
+}
+function clear(coll){ if (coll) coll.clearLayers(); }
+
+/* Панорама так, чтобы станция оказалась НЕ под панелями: точка ставится
+   на 62% ширины экрана (левее chart-панели, правее сайдбара). */
+function panToStation(h, zoom){
+  const z = Math.max(map.getZoom(), zoom || 7);
+  const pt = map.project([h.lat, h.lon], z);
+  const sz = map.getSize();
+  const center = map.unproject(pt.subtract([(0.62 - 0.5) * sz.x, 0]), z);
+  map.flyTo(center, z, { duration: 0.7 });
+}
+
+/* Минимальная ЭКРАННАЯ ширина волны/зоны: на обзорном масштабе (z≈8-10,
+   ~450 м/пикс) реальная лента 100-500 м тоньше пикселя и невидима. */
+function visWidths(w, floor){
+  const out = new Float32Array(w.length);
+  for (let k = 0; k < w.length; k++) out[k] = w[k] > 1 ? Math.max(w[k], floor) : 0;
+  return out;
+}
+/* Минимальная визуальная ширина волны для станции: у малых ГТС — десятки метров. */
+function visFloor(h){ return h.visMinW || 500; }
 
 /* ============================================================
    СОСТОЯНИЕ
@@ -134,7 +208,7 @@ async function fetchWithRetry(url, ms=10000, tries=2){
 /* ============================================================
    КЭШ
    ============================================================ */
-const CACHE_KEY = 'ges_cache_v18';
+const CACHE_KEY = 'ges_cache_v19';
 const RIVER_KEY_PREFIX = 'ges_river_v7_';
 const RES_KEY_PREFIX   = 'ges_res_v7_';
 const TTL = { history:12*3600*1000, forecast:30*60*1000, climate:7*24*3600*1000 };
@@ -544,21 +618,45 @@ async function fetchFromAPI(h, mode){
              clim:{time:a.daily.time, t:a.daily.temperature_2m_mean, p:a.daily.precipitation_sum} };
   }
   if (mode === 'climate'){
-    const a = await fetchWithRetry(
-      `https://climate-api.open-meteo.com/v1/climate?latitude=${h.lat}&longitude=${h.lon}&start_date=2025-01-01&end_date=2030-12-31&models=MRI_AGCM3_2_S&daily=temperature_2m_mean,precipitation_sum`, 25000);
-    const t = a.daily.temperature_2m_mean_MRI_AGCM3_2_S || a.daily.temperature_2m_mean;
-    const p = a.daily.precipitation_sum_MRI_AGCM3_2_S || a.daily.precipitation_sum;
-    const QmaxT = h.capacityMW*1e6/(1000*9.81*h.head*h.eff);
-    const Qmean = 0.4*QmaxT;
-    const valid = p.filter(v => v != null);
-    const Pmean = valid.length ? valid.reduce((s,v)=>s+v,0)/valid.length : 2;
+    /* Климатический режим — ТОЛЬКО файл пользователя «модель клим.xlsx»
+       (climate-data.js): CMIP6 ens-mean SSP5-8.5, осадки мм/день помесячно,
+       история 1985–2025 + будущее 2041–2070. Внешние климатические API
+       не вызываются. */
+    const cd = (typeof CLIMATE_DATA !== 'undefined') ? CLIMATE_DATA[h.id] : null;
+    if (!cd || !cd.hist || !cd.hist.length) throw new Error('нет климатической модели для станции');
+    const time = [], p = [], t = [];
+    const rows = cd.hist.concat(cd.fut || []);
+    for (const row of rows){
+      const y = row[0];
+      for (let m = 0; m < 12; m++){
+        const v = row[m+1];
+        if (v == null) continue;
+        time.push(`${y}-${String(m+1).padStart(2,'0')}-15`);
+        p.push(v * new Date(y, m+1, 0).getDate());   // мм/день → мм/мес
+        t.push(null);
+      }
+    }
+    const QmaxT = Math.max(h.capacityMW, 0.05) * 1e6 / (1000*9.81*h.head*h.eff);
+    const Qmean = Math.max(0.02, 0.4*QmaxT);
+    const valid = p.filter(v => v != null && v > 0);
+    const Pmean = valid.length ? valid.reduce((s,v)=>s+v,0)/valid.length : 50;
     const q = p.map(P => Math.max(0, Qmean*(0.4 + 0.8*(P||0)/Math.max(0.1,Pmean))));
-    return { hydro:{time:a.daily.time, q}, clim:{time:a.daily.time, t, p} };
+    return { hydro:{time, q}, clim:{time, t, p} };
   }
   throw new Error('unknown mode');
 }
 
 async function loadStation(h, mode){
+  /* Климатический режим — встроенные данные (climate-data.js), сеть не нужна */
+  if (mode === 'climate'){
+    try {
+      const data = await fetchFromAPI(h, mode);
+      return { data, source: 'api' };
+    } catch(e){
+      console.warn(`Климат ${h.name}: ${e.message}`);
+      return { data: syntheticData(h, mode), source: 'synth' };
+    }
+  }
   if (apiAvailable === false){
     return { data: syntheticData(h, mode), source: 'synth' };
   }
@@ -659,10 +757,11 @@ function recompute(){
    ============================================================ */
 function createMarker(h){
   const mk = L.circleMarker([h.lat, h.lon], {
-    radius: 7, color:'#ffffff', weight: 2.5,
+    radius: 8, color:'#ffffff', weight: 2.5,
     fillColor:'#888', fillOpacity: 1, opacity: 1
   }).addTo(layerMarkers);
   mk.on('click', () => selectHPP(h.id, false));
+  mk.bindTooltip(h.name, { direction:'top', offset:[0,-8] });
   S.markers[h.id] = mk;
   return mk;
 }
@@ -692,8 +791,8 @@ async function loadPeriod(mode){
   S.results = {}; S.idx = 0; S.playing = false; S.damBreak = null; S.dates = [];
   S.cache[mode] = {}; S.sources = {}; S.loadingStation = {};
 
-  layerFlood.clearLayers();
-  layerRes.clearLayers();
+  clear(layerFlood);
+  clear(layerRes);
   S.reservoirs = {};
   $('playBtn').textContent = '▶';
 
@@ -716,7 +815,7 @@ async function loadPeriod(mode){
       const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
       if (item){
         item.querySelector('.src').className = 'src cache';
-        item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
+        item.querySelector('.mw').textContent = capLabel(h);
       }
     }
   });
@@ -778,7 +877,7 @@ async function loadPeriod(mode){
       const item = document.querySelector(`.hppItem[data-id="${h.id}"]`);
       if (item){
         item.querySelector('.src').className = 'src ' + source;
-        item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
+        item.querySelector('.mw').textContent = capLabel(h);
       }
 
       if (!S.dates.length){
@@ -948,6 +1047,177 @@ function makeFloodFootprint(h, course){
 }
 
 /* ============================================================
+   ФИЗИЧЕСКАЯ МОДЕЛЬ ПРОРЫВА ПЛОТИНЫ (1D)
+   Уравнения мелкой воды (Сен-Венана) вдоль реального русла:
+     ∂A/∂t + ∂Q/∂x = 0
+     ∂Q/∂t + ∂(Q²/A + gA²/2B̄)/∂x = −gA·dz/∂x − g·n²·Q|Q|·A/(A·R^{4/3})
+   Канал — трапеция (B(s) по дну, откос m=1:18), шероховатость Мэннинга
+   n=0.035 (горный галечник). Профиль дна — реальный (SRTM/DEM, встроен).
+   Граничное условие на створе — водослив широкого порога с формированием
+   прорана за ~20 мин и опорожнением водохранилища (баланс объёма).
+   Схема Годунова с потоком Гуно (HLL), адаптивный шаг по Куранту;\n   сухое дно обрабатывается корректно (переход мокрое/сухое).
+   ============================================================ */
+function resampleUniform(course, ds){
+  /* единая сетка ds вдоль русла; заодно — кумулятивная дистанция исходного курса */
+  const cum = [0];
+  for (let i=1;i<course.length;i++) cum.push(cum[i-1] + haversineM(...course[i-1], ...course[i]));
+  const L = cum[cum.length-1];
+  const N = Math.max(10, Math.floor(L/ds));
+  const line = []; let j = 0;
+  for (let k=0;k<=N;k++){
+    const s = k*ds;
+    while (j < cum.length-2 && cum[j+1] < s) j++;
+    const t = cum[j+1] > cum[j] ? (s-cum[j])/(cum[j+1]-cum[j]) : 0;
+    line.push([course[j][0] + (course[j+1][0]-course[j][0])*Math.min(1,Math.max(0,t)),
+               course[j][1] + (course[j+1][1]-course[j][1])*Math.min(1,Math.max(0,t))]);
+  }
+  return { line, cum, L, N };
+}
+
+function simulateDamBreak(h, course, elev){
+  const ds = 250;
+  const { line, cum, L, N } = resampleUniform(course, ds);
+
+  /* профиль дна на единой сетке: elev привязан к исходным точкам курса */
+  const z = new Float64Array(N+1);
+  for (let k=0;k<=N;k++){
+    const s = k*ds;
+    let j = 0;
+    while (j < cum.length-2 && cum[j+1] < s) j++;
+    const t = cum[j+1] > cum[j] ? (s-cum[j])/(cum[j+1]-cum[j]) : 0;
+    const za = elev[Math.min(j, elev.length-1)], zb = elev[Math.min(j+1, elev.length-1)];
+    z[k] = za + (zb-za)*Math.min(1, Math.max(0, t));
+  }
+  /* лёгкое сглаживание профиля (DEM-шум в ущелье) */
+  for (let pass=0; pass<4; pass++){
+    for (let k=1;k<N;k++) z[k] = (z[k-1] + 2*z[k] + z[k+1]) / 4;
+  }
+
+  const g = 9.81, nM = 0.04, mSide = 6;   /* откосы стенок каньона 1:6 — только для показа ширины */
+  const wCell = new Float64Array(N+1);          // характерная ширина русла (м)
+  for (let k=0;k<=N;k++){
+    const s = k*ds / Math.max(1, L);
+    wCell[k] = (h.chanW0 || 40) + ((h.chanW1 || 160) - (h.chanW0 || 40)) * Math.pow(s, 0.7);
+  }
+
+  /* подпор у плотины */
+  const H0eff = (h.nmu - z[0] > 3) ? (h.nmu - z[0]) : (h.damH || 10);
+  let poolLvl = z[0] + H0eff;
+  let poolVol = h.totalVolume * 1e9;
+
+  const Hd = new Float64Array(N+1);              // глубина, м
+  const q  = new Float64Array(N+1);              // удельный расход, м²/с
+  const Hn = new Float64Array(N+1), qn = new Float64Array(N+1);
+  const F1 = new Float64Array(N+2), F2 = new Float64Array(N+2);
+
+  /* поток Гуно (HLL) на грани между ячейками, сухое дно корректно */
+  const fo = [0, 0];
+  const hll = (hL, zL, qL, hR, zR, qR) => {
+    const zf = Math.max(zL, zR);
+    const HL = Math.max(0, hL + zL - zf), HR = Math.max(0, hR + zR - zf);
+    if (HL < 1e-6 && HR < 1e-6){ fo[0] = 0; fo[1] = 0; return; }
+    const uL = qL / Math.max(HL, 1e-6), uR = qR / Math.max(HR, 1e-6);
+    const aL = Math.sqrt(g * Math.max(HL, 0)), aR = Math.sqrt(g * Math.max(HR, 0));
+    const sL = Math.min(uL - aL, uR - aR), sR = Math.max(uL + aL, uR + aR);
+    const FL1 = HL * uL, FL2 = HL * uL * uL + 0.5 * g * HL * HL;
+    const FR1 = HR * uR, FR2 = HR * uR * uR + 0.5 * g * HR * HR;
+    if (sL >= 0){ fo[0] = FL1; fo[1] = FL2; }
+    else if (sR <= 0){ fo[0] = FR1; fo[1] = FR2; }
+    else {
+      fo[0] = (sR*FL1 - sL*FR1 + sL*sR*(HR - HL)) / (sR - sL);
+      fo[1] = (sR*FL2 - sL*FR2 + sL*sR*(HR*uR - HL*uL)) / (sR - sL);
+    }
+  };
+
+  const frames = [];
+  const maxW = new Float64Array(N+1);
+  const T_FORM = 20*60;                          // формирование прорана, с
+  const T_MAX = 48*3600;
+  let t = 0, nextFrame = 0, stuck = 0;
+
+  while (t < T_MAX){
+    /* расход прорана: водослив широкого порога */
+    const breach = Math.min(1, t / T_FORM);
+    let Qsrc = 0;
+    if (poolVol > 0 && poolLvl > z[0]){
+      Qsrc = 1.7 * (h.breachW || 60) * breach * Math.pow(Math.max(0, poolLvl - z[0]), 1.5);
+    }
+
+    /* шаг по Куранту (только мокрые ячейки) */
+    let cmax = 0.5;
+    for (let k=0;k<=N;k++){
+      if (Hd[k] < 0.02) continue;
+      const u = q[k] / Math.max(Hd[k], 1e-6);
+      const c = Math.abs(u) + Math.sqrt(g * Hd[k]);
+      if (c > cmax) cmax = c;
+    }
+    const dt = Math.min(4, Math.max(0.02, 0.4 * ds / cmax));
+
+    /* баланс водохранилища за фактический dt */
+    if (Qsrc > 0){
+      poolVol = Math.max(0, poolVol - Qsrc * dt);
+      if (poolVol <= 0){ Qsrc = 0; poolLvl = z[0]; }
+      else poolLvl = z[0] + H0eff * (poolVol / (h.totalVolume * 1e9));
+    }
+
+    /* граничная ячейка: уровень прорана / расход */
+    Hd[0] = Math.max(0, poolLvl - z[0]) * breach;
+    q[0]  = Qsrc / Math.max(wCell[0], 5);
+
+    /* потоки на гранях (грань k — между ячейками k-1 и k) */
+    hll(Hd[0], z[0], q[0], Hd[0], z[0], q[0]); F1[0] = fo[0]; F2[0] = fo[1];
+    for (let k=1; k<=N; k++){
+      hll(Hd[k-1], z[k-1], q[k-1], Hd[k], z[k], q[k]);
+      F1[k] = fo[0]; F2[k] = fo[1];
+    }
+    hll(Hd[N], z[N], q[N], Hd[N], z[N], q[N]); F1[N+1] = fo[0]; F2[N+1] = fo[1];
+
+    for (let k=1; k<=N; k++){
+      /* МАССА: объёмное сохранение с шириной русла (B·H·dx),
+         так что 15 млн м³ вдхр реально ограничивают глубину затопления */
+      const bFaceR = 0.5*(wCell[k] + wCell[Math.min(k+1, N)]);
+      const bFaceL = 0.5*(wCell[k] + wCell[Math.max(k-1, 0)]);
+      let HH = Hd[k] - dt/(ds * wCell[k]) * (F1[k+1]*bFaceR - F1[k]*bFaceL);
+      let QQ = q[k]  - dt/ds * (F2[k+1] - F2[k]);
+      if (!isFinite(HH) || HH < 0) HH = 0;
+      if (!isFinite(QQ)) QQ = 0;
+      /* уклон дна (источник импульса); лимит |slope|<=0.08 — подавление
+         джамп-отражений на резких DEM-порогах */
+      const slp = (z[Math.min(k+1, N)] - z[Math.max(k-1, 0)]) / (2*ds);
+      QQ -= dt * g * HH * Math.max(-0.08, Math.min(0.08, slp));
+      /* трение Мэннинга, полу-неявно */
+      if (HH > 1e-5){
+        const u = QQ / HH;
+        QQ /= (1 + dt * g * nM*nM * Math.abs(u) / Math.pow(Math.max(HH, 1e-3), 4/3));
+      } else QQ = 0;
+      Hn[k] = HH; qn[k] = QQ;
+    }
+    Hn[0] = Hd[0]; qn[0] = q[0];
+    Hd.set(Hn); q.set(qn);
+    t += dt;
+
+    if (t >= nextFrame){
+      let front = 0, hmax = 0;
+      const wArr = new Float32Array(N+1);
+      for (let k=0;k<=N;k++){
+        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, h.visMinW ? h.visMinW*4 : 500)) : 0;
+        if (Hd[k] > 0.05){ front = k; if (Hd[k] > hmax) hmax = Hd[k]; }
+        if (wArr[k] > maxW[k]) maxW[k] = wArr[k];
+      }
+      frames.push({ t, w: wArr, front, hmax, qsrc: Qsrc, pool: poolLvl - z[0] });
+      nextFrame += 30;
+      if (front >= N-2) break;
+      if (Qsrc <= 0 && hmax < 0.05){ if (++stuck > 20) break; } else stuck = 0;
+      if (frames.length > 700) break;
+    }
+  }
+  const lastF = frames[frames.length-1] || { front: 0 };
+  return { line, ds, N, L, frames, maxW, simT: t, H0eff,
+           frontKm: lastF.front*ds/1000,
+           physInfo: `H₀=${H0eff.toFixed(0)} м, Мэннинг n=0.04` };
+}
+
+/* ============================================================
    ПРОРЫВ
    ============================================================ */
 async function startDamBreak(){
@@ -968,19 +1238,114 @@ async function startDamBreak(){
     return;
   }
 
-  layerFlood.clearLayers();
-  layerFloodZone.clearLayers();
+  clear(layerFlood);
+  clear(layerFloodZone);
 
-  /* Зона затопления: полный охват волны, бледным цветом под движущейся
-     волной — сразу видно, какие территории окажутся под водой. */
-  const footprint = makeFloodFootprint(h, course);
-  if (footprint){
-    L.polygon(footprint.pts, {
-      color:'#ff9400', weight:1.5, opacity:0.85, dashArray:'7 5',
-      fillColor:'#ffa726', fillOpacity:0.28, interactive:false
-    }).addTo(layerFloodZone);
+  /* ========= ФИЗИЧЕСКИЙ РЕЖИМ: уравнения Сен-Венана по реальному профилю ======== */
+  const elev = (typeof RIVER_ELEV !== 'undefined') ? RIVER_ELEV[h.id] : null;
+  if (elev && elev.length >= 10){
+    showStatusMsg('Расчёт прорыва: Сен-Венан 1D по профилю DEM…');
+    await sleep(30);
+    const sim = simulateDamBreak(h, course, elev);
+    if (!sim.frames.length){ showStatusMsg('Модель не дала волны'); return; }
+
+    /* Зона затопления = размах затопленной ширины за весь расчёт
+       (обрезаем по реально достигнутому фронту — без «нитки» до конца курса) */
+    let maxK = sim.N;
+    while (maxK > 1 && sim.maxW[maxK] < 1) maxK--;
+    maxK = Math.max(maxK, 2);
+    const footPts = makeBandPolygon(
+      chaikinSmooth(sim.line.slice(0, maxK + 1), 1),
+      Array.from(visWidths(sim.maxW.slice(0, maxK + 1), visFloor(h))), h.lat);
+
+    /* перенос и зум на зону прорыва, чтобы волну было видно */
+    const seg = sim.line.slice(0, maxK + 1);
+    const la = seg.map(p => p[0]), lo = seg.map(p => p[1]);
+    map.flyToBounds(
+      [[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
+      { paddingTopLeft: [370, 90], paddingBottomRight: [450, 120], duration: 0.7 });
+    polyAdd(layerFloodZone, footPts, {
+      color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
+      fill:'#ffa726', fillOpacity:0.20
+    });
+
+    const realDur = Math.min(60, Math.max(20, sim.simT / 240));
+    const fmtT = s => {
+      const m2 = Math.floor(s/60), h2 = Math.floor(m2/60);
+      return (h2 ? h2 + 'ч ' : '') + (m2 % 60) + 'м';
+    };
+    S.damBreak = { id:h.id, progress:0, start:performance.now(), duration: realDur, course };
+    $('alertBanner').classList.add('show');
+    recompute(); render();
+    $('details').innerHTML = detailsHTML(h);
+    /* простое окошко у плотины: только длина волны */
+    const waveKm = courseLength(sim.line.slice(0, maxK + 1)) / 1000;
+    setTimeout(() => {
+      L.popup({ maxWidth: 220, autoPan: false, closeButton: false, className: 'breakPop' })
+        .setLatLng([h.lat, h.lon])
+        .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${waveKm.toFixed(1)} км</b>`)
+        .openOn(map);
+    }, 500);
+
+    let fi = 0;
+    function step(tNow){
+      if (!S.damBreak) return;
+      const elapsed = (tNow - S.damBreak.start) / 1000;
+      const tSim = Math.min(sim.simT, elapsed * (sim.simT / realDur));
+      S.damBreak.progress = Math.min(1, tSim / sim.simT);
+      while (fi < sim.frames.length - 1 && sim.frames[fi+1].t <= tSim) fi++;
+      const fr = sim.frames[fi];
+      clear(layerFlood);
+      const upto = Math.min(sim.N, Math.max(2, Math.round(fr.front)));
+      if (upto > 1){
+        const lineTrim = sim.line.slice(0, upto + 1);
+        const wTrim = Array.from(visWidths(fr.w.slice(0, upto + 1), visFloor(h)));
+        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 1), wTrim, h.lat);
+        const depth = Math.min(1, fr.hmax / 15);
+        polyAdd(layerFlood, pts, {
+          color:'#ff3b3b', weight:1.5, opacity:0.85,
+          fill:'#ff5a5a', fillOpacity:0.26 + 0.22*depth
+        });
+        try {
+          L.circleMarker(sim.line[upto], {
+            radius: 6, color:'#ff1a1a', weight:2.5, opacity:0.95,
+            fillColor:'#ff5a5a', fillOpacity:0.9, interactive:false
+          }).addTo(layerFlood);
+        } catch(e){ console.warn('front circle:', e.message); }
+      }
+      $('alertBanner').innerHTML =
+        `💥 ПРОРЫВ · Сен-Венан 1D · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
+        ` · глубина до ${fr.hmax.toFixed(1)} м · Q прорана ${fr.qsrc.toFixed(0)} м³/с` +
+        (fr.pool > 0.05 ? ` · вдхр −${(sim.H0eff - fr.pool).toFixed(1)} м` : ' · вдхр пусто');
+      render();
+      if (tSim < sim.simT) requestAnimationFrame(step);
+      else setTimeout(() => {
+        clear(layerFlood);
+        clear(layerFloodZone);
+        $('alertBanner').classList.remove('show');
+        S.damBreak = null;
+        $('details').innerHTML = detailsHTML(h);
+      }, 2600);
+    }
+    requestAnimationFrame(step);
+    return;
   }
 
+  /* ======== ДЕКОРАТИВНЫЙ ФОЛБЭК (нет DEM-профиля) ======== */
+  const footprint = makeFloodFootprint(h, course);
+  if (footprint){
+    polyAdd(layerFloodZone, footprint.pts, {
+      color:'#ff9400', weight:1.5, opacity:0.85, dash:true,
+      fill:'#ffa726', fillOpacity:0.28
+    });
+  }
+
+  setTimeout(() => {
+    L.popup({ maxWidth: 220, autoPan: false, closeButton: false, className: 'breakPop' })
+      .setLatLng([h.lat, h.lon])
+      .setContent(`<b style="color:#ff5a5a">💥 ПЛОТИНА РАЗРУШЕНА</b><br>Длина волны: <b>${(courseLength(course)/1000).toFixed(1)} км</b>`)
+      .openOn(map);
+  }, 400);
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
   $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению`;
@@ -993,27 +1358,29 @@ async function startDamBreak(){
     if (!S.damBreak) return;
     const elapsed = (t - S.damBreak.start)/1000;
     S.damBreak.progress = Math.min(1, elapsed / S.damBreak.duration);
-    layerFlood.clearLayers();
+    clear(layerFlood);
 
     const wave = makeFloodWaveFromCourse(h, course, S.damBreak.progress);
     if (wave){
       const fade = wave.decay;
-      L.polygon(wave.pts, {
+      polyAdd(layerFlood, wave.pts, {
         color:'#ff3b3b', weight:1.5, opacity:0.8*fade + 0.1,
-        fillColor:'#ff5a5a', fillOpacity:0.30*fade, interactive:false
-      }).addTo(layerFlood);
+        fill:'#ff5a5a', fillOpacity:0.30*fade
+      });
       if (wave.decay > 0.05){
-        L.circleMarker(wave.front, {
-          radius: 4 + 4*wave.decay, color:'#ff1a1a', weight:2.5, opacity:0.95*fade,
-          fillColor:'#ff5a5a', fillOpacity:0.9*fade, interactive:false
-        }).addTo(layerFlood);
+        try {
+          L.circleMarker(wave.front, {
+            radius: 4 + 4*wave.decay, color:'#ff1a1a', weight:2.5, opacity:0.95*fade,
+            fillColor:'#ff5a5a', fillOpacity:0.9*fade, interactive:false
+          }).addTo(layerFlood);
+        } catch(e){ console.warn('front:', e.message); }
       }
     }
     render();
     if (S.damBreak.progress < 1) requestAnimationFrame(step);
     else setTimeout(() => {
-      layerFlood.clearLayers();
-      layerFloodZone.clearLayers();
+      clear(layerFlood);
+      clear(layerFloodZone);
       $('alertBanner').classList.remove('show');
       S.damBreak = null;
       $('details').innerHTML = detailsHTML(h);
@@ -1024,8 +1391,8 @@ async function startDamBreak(){
 
 function stopDamBreak(){
   S.damBreak = null;
-  layerFlood.clearLayers();
-  layerFloodZone.clearLayers();
+  clear(layerFlood);
+  clear(layerFloodZone);
   $('alertBanner').classList.remove('show');
 }
 
@@ -1068,10 +1435,7 @@ function drawReservoir(h, i, lf, overtop){
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
     const group = L.layerGroup();
     rings.forEach(ring => {
-      L.polygon(ring, {
-        color: color, weight: 1.6, opacity: 0.9,
-        fillColor: fill, fillOpacity: op, interactive: false
-      }).addTo(group);
+      polyAdd(group, ring, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
     });
     group.addTo(layerRes);
     S.reservoirs[h.id] = group;
@@ -1085,10 +1449,7 @@ function drawReservoir(h, i, lf, overtop){
     const group = L.layerGroup();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
-        L.polygon(pts, {
-          color: color, weight: 1.6, opacity: 0.9,
-          fillColor: fill, fillOpacity: op, interactive: false
-        }).addTo(group);
+        polyAdd(group, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
       });
     });
     group.addTo(layerRes);
@@ -1126,10 +1487,7 @@ function drawReservoir(h, i, lf, overtop){
     pts.push([cLat + dLat, cLon + dLon]);
   }
 
-  const poly = L.polygon(pts, {
-    color: color, weight: 1.6, opacity: 0.9,
-    fillColor: fill, fillOpacity: op, interactive: false
-  }).addTo(layerRes);
+  const poly = polyAdd(layerRes, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
   S.reservoirs[h.id] = poly;
 }
 
@@ -1243,7 +1601,7 @@ function render(){
     if (isBroken || overtop) col = '#ff3b3b';
     else col = lf>0.75?'#3ddc84':lf>0.45?'#a8e05f':lf>0.20?'#ffb02e':lf>0.05?'#ff8a3d':'#ff6b6b';
     mk.setStyle({ fillColor: col, color:'#ffffff', weight:2.5, opacity:1, fillOpacity:1 });
-    mk.bindPopup(popupHTML(h, r, i, col, isBroken, overtop), { maxWidth:320 });
+    mk.bindPopup(popupHTML(h, r, i, col, isBroken, overtop), { maxWidth: 330 });
   });
 
   if (S.selected){
@@ -1265,6 +1623,13 @@ function render(){
   if (S.selected) updateChart();
 }
 
+function fmtMW(v){
+  if (!v) return '0 МВт';
+  return v >= 1 ? v.toFixed(0)+' МВт' : (v*1000).toFixed(0)+' кВт';
+}
+function capLabel(h){
+  return h.powerLabel ? h.powerLabel : ((h.capacityMW || 0) + ' МВт');
+}
 function popupHTML(h, r, i, col, isBroken, overtop){
   const P = r.power[i], lf = r.lf[i]*100;
   const src = S.sources[h.id];
@@ -1272,15 +1637,15 @@ function popupHTML(h, r, i, col, isBroken, overtop){
   const status = isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">💥 ПЛОТИНА РАЗРУШЕНА</div>'
               : overtop ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">⚠ КРИТИЧЕСКИЙ УРОВЕНЬ</div>' : '';
   return `<h4>${h.name}</h4>
-  <div style="color:#8ba0b6;margin-bottom:8px">р. ${h.river} · ${h.capacityMW} МВт · ${srcLabel}</div>
+  <div style="color:#8ba0b6;margin-bottom:8px">р. ${h.river} · ${capLabel(h)} · ${srcLabel}</div>
   ${status}
-  <div class="kv"><span>Мощность</span><span style="color:${col};font-weight:700">${P.toFixed(0)} МВт</span></div>
+  <div class="kv"><span>Мощность</span><span style="color:${col};font-weight:700">${h.notHPP ? '—' : fmtMW(P)}</span></div>
   <div class="kv"><span>Загрузка</span><span>${lf.toFixed(1)} %</span></div>
   <div class="kv"><span>Уровень ВБ</span><span>${r.level[i].toFixed(2)} м</span></div>
   <div class="kv"><span>Напор</span><span>${r.head[i].toFixed(1)} м</span></div>
-  <div class="kv"><span>Расход</span><span>${r.flow[i].toFixed(0)} м³/с</span></div>
-  <div class="kv"><span>Сброс</span><span>${r.spill[i].toFixed(0)} м³/с</span></div>
-  <div class="kv"><span>Зеркало</span><span>${r.area[i].toFixed(0)} км²</span></div>`;
+  <div class="kv"><span>Расход</span><span>${r.flow[i].toFixed(1)} м³/с</span></div>
+  <div class="kv"><span>Сброс</span><span>${r.spill[i].toFixed(1)} м³/с</span></div>
+  <div class="kv"><span>Зеркало</span><span>${r.area[i].toFixed(2)} км²</span></div>`;
 }
 
 /* ============================================================
@@ -1297,8 +1662,11 @@ async function selectHPP(id, fromList){
   $('chartTitle').textContent = h.name;
   $('chartSub').textContent = `р. ${h.river}`;
 
-  if (fromList) map.flyTo([h.lat, h.lon], Math.max(map.getZoom(), 7), { duration:0.8 });
-  S.markers[id]?.openPopup();
+  if (map){
+    if (fromList) panToStation(h);
+    /* попап — после панорамы (Leaflet попапы зум не закрывает, так рисуется чище) */
+    setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); }, fromList ? 800 : 0);
+  }
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
     S.loadingStation[id] = true;
@@ -1311,7 +1679,7 @@ async function selectHPP(id, fromList){
     delete S.loadingStation[id];
     if (item){
       item.querySelector('.src').className = 'src ' + source;
-      item.querySelector('.mw').textContent = h.capacityMW + ' МВт';
+      item.querySelector('.mw').textContent = capLabel(h);
     }
     if (!S.dates.length){ S.dates = data.hydro.time; updateTimeline(S.mode); }
     recompute(); render();
@@ -1366,19 +1734,23 @@ function detailsHTML(h){
   ${overtop && !isBroken ? '<div style="color:#ff6b6b;font-weight:700;margin-bottom:6px">⚠ КРИТИЧЕСКИЙ УРОВЕНЬ</div>' : ''}
   <div class="kv"><span>Река</span><span>${h.river}</span></div>
   <div class="kv"><span>Водохранилище</span><span>${h.reservoirName || '—'}</span></div>
+  ${h.resCoords ? `<div class="kv"><span>Координаты вдхр</span><span>${h.resCoords}</span></div>` : ''}
   <div class="kv"><span>Координаты плотины</span><span>${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}</span></div>
   <div class="kv"><span>Течение (flowDir)</span><span>${h.flowDir}°</span></div>
-  <div class="kv"><span>Установленная мощность</span><span>${h.capacityMW} МВт</span></div>
+  <div class="kv"><span>Установленная мощность</span><span>${capLabel(h)}</span></div>
   <div class="kv"><span>Тип плотины</span><span>${h.damType || '—'}</span></div>
   <div class="kv"><span>Расчётный напор</span><span>${h.head} м</span></div>
+  ${h.note ? `<div class="kv"><span>Примечание</span><span style="color:#ffb02e">${h.note}</span></div>` : ''}
   <div class="kv"><span>НПУ / УМО</span><span>${h.nmu} / ${h.umo} м</span></div>
   <div class="kv ${overtop?'danger':''}"><span>Текущий уровень</span><span>${r.level[i].toFixed(2)} м</span></div>
-  <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${r.power[i].toFixed(0)} МВт</span></div>
+  <div class="kv ${overtop?'danger':''}"><span>Текущая мощность</span><span>${h.notHPP ? '—' : fmtMW(r.power[i])}</span></div>
   <div class="kv"><span>Выработка</span><span>${r.kwh/1e9 >= 0.05 ? (r.kwh/1e9).toFixed(1)+' млрд кВт·ч' : (r.kwh/1e6).toFixed(0)+' млн кВт·ч'}</span></div>
   <div style="margin-top:8px;padding:8px 10px;background:rgba(255,59,59,.08);border:1px solid rgba(255,59,59,.25);border-radius:8px;font-size:11px;line-height:1.5">
     <div style="color:#ff6b6b;font-weight:700;margin-bottom:4px">🌊 Волна прорыва — ${wp.type}</div>
     <div>${wp.description}</div>
     <div style="color:#8ba0b6;margin-top:4px">скорость ≈ ${wp.speedMs} м/с · ширина до ${(wp.maxWidth/1000).toFixed(1)} км</div>
+    ${(typeof RIVER_ELEV !== 'undefined' && RIVER_ELEV[h.id]) ?
+      `<div style="color:#39d353;margin-top:4px">∿ расчёт: Сен-Венан 1D, профиль дна DEM, водосливная кривая прорана, n=0.035</div>` : ''}
     <div style="color:#8ba0b6;margin-top:2px;font-size:10px">${courseInfo}</div>
     <div style="color:#8ba0b6;font-size:10px">${resInfo}</div>
   </div>`;

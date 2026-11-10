@@ -64,8 +64,8 @@
   <canvas id="chart"></canvas>
 </section>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 if ('serviceWorker' in navigator){
   window.addEventListener('load', () => {
@@ -73,8 +73,11 @@ if ('serviceWorker' in navigator){
   });
 }
 </script>
+<div id="buildStamp">сборка <b>v19 · узкая волна</b></div>
 <script src="rivers-data.js"></script>
 <script src="reservoirs-data.js"></script>
+<script src="terrain-data.js"></script>
+<script src="climate-data.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
