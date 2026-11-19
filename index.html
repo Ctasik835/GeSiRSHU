@@ -32,6 +32,7 @@
     <button class="scenBtn" data-scen="flood">🌊 Паводок</button>
     <button class="scenBtn" data-scen="drought">☀️ Засуха</button>
     <button class="scenBtn danger" data-scen="dam_break">💥 Прорыв</button>
+    <button class="scenBtn" data-scen="release" title="Каскадная модель дополнительного сброса (ваш xlsx) — только Перовская">📤 Сброс</button>
   </div>
   <header style="border-top:1px solid var(--line)">ГЭС <span id="hppCount"></span></header>
   <div id="hppList"></div>
@@ -61,7 +62,8 @@
 
 <section id="chartPanel">
   <div class="head"><b id="chartTitle">—</b><span id="chartSub"></span></div>
-  <canvas id="chart"></canvas>
+  <div class="chart-wrap"><canvas id="chartPowerC"></canvas></div>
+  <div class="chart-wrap"><canvas id="chartLevelC"></canvas></div>
 </section>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -73,7 +75,7 @@ if ('serviceWorker' in navigator){
   });
 }
 </script>
-<div id="buildStamp">сборка <b>v19 · узкая волна</b></div>
+<div id="buildStamp">сборка <b>v29 · центрирование ГЭС</b></div>
 <script src="rivers-data.js"></script>
 <script src="reservoirs-data.js"></script>
 <script src="terrain-data.js"></script>

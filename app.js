@@ -12,12 +12,6 @@ const HPPS = [
    reservoirName:'пруд Кравцовской МГЭС', damH:3, breachW:29, chanW0:8, chanW1:45,
    damType:'IV класс, гребень 29×1 м, напор 2,5 м (82 года эксплуатации)',
    note:'с 2025 г. идёт демонтаж старой плотины'},
-  {id:'yash', name:'Яшинская МГЭС (Вахвиала)', river:'Бусловка', lat:60.8031, lon:28.4953, flowDir:250,
-   capacityMW:1.2, powerLabel:'до 1,2 МВт', head:6, nmu:16, umo:14, areaNMU:0.03,
-   totalVolume:0.00009, usefulVolume:0.00003, eff:.85, year:1896, visMinW:35, terrainAmpl:50,
-   reservoirName:'пруд Яшинской МГЭС', damH:2, breachW:18.3, chanW0:10, chanW1:50,
-   damType:'водослив с широким порогом, 3 пролёта, высота 2 м',
-   note:'апрель 2025: объявлен тендер на снос ГТС'},
   {id:'andr', name:'Андреевская ГЭС', river:'Андреевка (Тукалус-Йоки)', lat:60.71815, lon:28.1786, flowDir:170,
    capacityMW:0.6, powerLabel:'0,6 МВт', head:7, nmu:99, umo:96.5, areaNMU:0.045,
    totalVolume:0.00012, usefulVolume:0.00004, eff:.85, year:1950, visMinW:30, terrainAmpl:50,
@@ -49,10 +43,11 @@ const HPPS = [
    damType:'плотина 1948 г. (строители — студенты ЛПИ им. Калинина)',
    note:''}
 ];
-const PRIORITY = ['krav','yash','andr','pero','igla','rokk','alak'];
+const PRIORITY = ['krav','andr','pero','igla','rokk','alak'];
 const HISTORY_START = '2023-01-01';
 const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
+const SHOW_DECORATIVE_WAVE = false;   // декоративная волна (широкий коридор) отключена — только физическая модель Сен-Венана
 
 /* ============================================================
    НАСТРОЙКИ ВОЛНЫ
@@ -114,7 +109,11 @@ function panToStation(h, zoom){
   const z = Math.max(map.getZoom(), zoom || 7);
   const pt = map.project([h.lat, h.lon], z);
   const sz = map.getSize();
-  const center = map.unproject(pt.subtract([(0.62 - 0.5) * sz.x, 0]), z);
+  /* Центрируем станцию в рабочей зоне карты между левой панелью (~260 px)
+     и правой панелью деталей/графиков (~450 px), чтобы не попадать под них. */
+  const leftPanel = 260, rightPanel = $('chartPanel').classList.contains('show') ? 450 : 120;
+  const cx = leftPanel + (sz.x - leftPanel - rightPanel) / 2;
+  const center = map.unproject(pt.subtract([cx - sz.x / 2, 0]), z);
   map.flyTo(center, z, { duration: 0.7 });
 }
 
@@ -135,7 +134,8 @@ const S = {
   mode:'history', scenario:'normal',
   dates:[], results:{}, cache:{}, sources:{},
   markers:{}, reservoirs:{},
-  idx:0, playing:false, selected:null, chart:null,
+  idx:0, playing:false, selected:null,
+  chartPower:null, chartLevel:null,
   lastChartUpdate:0, loading:false, damBreak:null,
   riverCourses:{}, reservoirsOSM:{},
   loadingRiver:{}, loadingRes:{}, loadingStation:{}
@@ -465,6 +465,182 @@ out geom;`;
   const course = trimCourse(osmCourse, params.maxDist * 1.4);
   try { localStorage.setItem(key, JSON.stringify({ ts:Date.now(), course })); } catch(e){}
   return course;
+}
+
+
+/* ============================================================
+   УЧЕБНЫЙ СЦЕНАРИЙ «ДОПОЛНИТЕЛЬНЫЙ СБРОС» — Перовская МГЭС
+   Точная реализация алгоритма пользователя
+   (Перовка_финальный_алгоритм.js / Перовка_ИТОГ_расчёт_и_пояснения.xlsx):
+   каскад линейных резервуаров, треугольный гидрограф, dt=30 с, горизонт 12 ч.
+   Зона затопления НЕ рассчитывается (по ограничениям исходной модели).
+   ============================================================ */
+const RELEASE = {
+  station: 'pero',
+  cfg: { area_m2: 15510, mean_drawdown_m: 0.10, background_m3s: 1.79,
+         duration_s: 3600, peak_time_s: 1200, dt_s: 30, speed_parameter_ms: 1,
+         horizon_s: 43200 },
+  points: [
+    [0,60.679924,28.950886], [503,60.682763,28.954423],
+    [1000,60.686019,28.955504], [1500,60.689338,28.951666],
+    [2000,60.692894,28.948601], [2500,60.696733,28.946009],
+    [3000,60.699537,28.939458]
+  ]
+};
+
+/* Алгоритм — копия calculate() из файла пользователя */
+function releaseCalculate(p, pts){
+  const volume = p.area_m2 * p.mean_drawdown_m;
+  const peak = 2 * volume / p.duration_s;
+  const tau = pts.slice(1).map((v, j) => (v[0] - pts[j][0]) / p.speed_parameter_ms);
+  const storage = tau.map(() => 0);
+  const src = t => t <= p.peak_time_s ? peak * t / p.peak_time_s :
+    (t <= p.duration_s ? peak * (p.duration_s - t) / (p.duration_s - p.peak_time_s) : 0);
+  const steps = Math.round(p.horizon_s / p.dt_s);
+  const out = new Float64Array((steps + 1) * tau.length);
+  for (let n = 0; n <= steps; n++){
+    const t = n * p.dt_s;
+    let current = src(t);
+    for (let j = 0; j < tau.length; j++){
+      if (n > 0){
+        storage[j] = (storage[j] + current * p.dt_s) / (1 + p.dt_s / tau[j]);
+        current = storage[j] / tau[j];
+      } else current = 0;
+      out[n * tau.length + j] = current;
+    }
+  }
+  return { out, tau, steps, volume, peak, bg: p.background_m3s, dt: p.dt_s, horizon: p.horizon_s };
+}
+
+function fmtClock(sec){
+  const hh = Math.floor(sec / 3600), mm = Math.floor(sec % 3600 / 60);
+  return (hh ? hh + 'ч ' : '') + mm + 'м';
+}
+
+async function startRelease(){
+  const p = RELEASE;
+  if (S.selected !== p.station){
+    showStatusMsg('Сценарий «Сброс» построен для Перовской МГЭС — переключаю на неё');
+    await selectHPP(p.station, true);
+  }
+  stopDamBreak();
+  const h = HPPS.find(x => x.id === p.station);
+  const res = releaseCalculate(p.cfg, p.points);
+  S.release = { res, start: performance.now(), dur: 30 * 1000 };  // 12 ч → 30 с
+  clear(layerFlood); clear(layerFloodZone);
+
+  /* русло участка (плотина → 3 км) */
+  const line = p.points.map(pt => [pt[1], pt[2]]);
+  L.polyline(line, { color:'#31c9ff', weight:3, opacity:0.9, interactive:false }).addTo(layerFloodZone);
+  p.reachMarkers = p.points.slice(1).map((pt, j) => {
+    const mk = L.circleMarker([pt[1], pt[2]], {
+      radius: 7, color:'#ffffff', weight:2, fillColor:'#1a4a6b', fillOpacity:0.95
+    }).addTo(layerFlood);
+    mk.bindTooltip('', { permanent:true, direction:'top', offset:[0,-8], className:'qtip' });
+    return mk;
+  });
+
+  /* зум на участок */
+  const la = line.map(q => q[0]), lo = line.map(q => q[1]);
+  map.flyToBounds([[Math.min(...la), Math.min(...lo)], [Math.max(...la), Math.max(...lo)]],
+    { paddingTopLeft: [380, 90], paddingBottomRight: [460, 120], duration: 0.8 });
+
+  /* паспорт сценария у плотины */
+  setTimeout(() => {
+    L.popup({ maxWidth: 280, autoPan: false, closeButton: true, className: 'breakPop' })
+      .setLatLng([h.lat, h.lon])
+      .setContent(`<b style="color:#31c9ff">📤 ДОПОЛНИТЕЛЬНЫЙ СБРОС — учебный сценарий</b><br>
+        Объём источника: <b>${res.volume.toFixed(0)} м³</b> (площадь 15 510 м² × снижение 0,10 м)<br>
+        Пик источника: <b>${res.peak.toFixed(3)} м³/с</b> при t=20 мин · T=60 мин<br>
+        Фоновый расход Q₀: <b>1,79 м³/с</b> (медиана поста 72007, 2008–2012)<br>
+        Трансформация: 6 участков × ~500 м, каскад линейных резервуаров, c=1 м/с<br>
+        <span style="color:#ffb02e;font-size:10px">Расходы рассчитаны каскадной линейной моделью (учебно).
+        Зона затопления не рассчитывалась.</span>`)
+      .openOn(map);
+  }, 1000);
+
+  $('alertBanner').classList.add('show');
+  $('details').innerHTML = releaseDetailsHTML(h);
+  updateChartRelease(res);
+  requestAnimationFrame(releaseStep);
+}
+
+function releaseStep(tNow){
+  if (!S.release) return;
+  const p = RELEASE, { res } = S.release;
+  const tSim = Math.min(res.horizon, (tNow - S.release.start) / 1000 * (res.horizon / (S.release.dur / 1000)));
+  const n = Math.min(res.steps, Math.round(tSim / res.dt));
+  const R = res.tau.length;
+  let frontJ = -1;
+  for (let j = 0; j < R; j++){
+    const extra = res.out[n * R + j];
+    const tot = res.bg + extra;
+    const rel = Math.min(1, extra / res.peak);
+    const mk = p.reachMarkers[j];
+    mk.setStyle({ fillColor: rel > 0.5 ? '#ff3b3b' : rel > 0.2 ? '#ff8a3d' : rel > 0.02 ? '#ffb02e' : '#1a4a6b' });
+    mk.setTooltipContent(`участок ${j+1} · ${p.points[j+1][0]} м<br><b>${tot.toFixed(3)} м³/с</b>` +
+      (extra > 0.001 ? ` <span style="color:#ffb02e">(+${extra.toFixed(3)})</span>` : ''));
+    if (extra > 0.005) frontJ = j;
+  }
+  const q6 = res.bg + res.out[n * R + R - 1];
+  $('alertBanner').innerHTML =
+    `📤 УЧЕБНЫЙ СБРОС · Перовская · t+${fmtClock(n * res.dt)} · Q₆ (3 км) = <b>${q6.toFixed(3)} м³/с</b>` +
+    (frontJ >= 0 ? ` · волна дошла до участка ${frontJ + 1}` : ' · волна у источника');
+  if (n < res.steps) requestAnimationFrame(releaseStep);
+  else $('alertBanner').innerHTML += ' · <b>сценарий завершён (12 ч)</b>';
+}
+
+function stopRelease(){
+  S.release = null;
+  clear(layerFlood); clear(layerFloodZone);
+  $('alertBanner').classList.remove('show');
+  if (RELEASE.reachMarkers) RELEASE.reachMarkers = null;
+}
+
+function releaseDetailsHTML(h){
+  return `<h3>${h.name}</h3>
+  <div style="font-size:11px;margin-bottom:6px;color:#31c9ff">📤 Учебный сценарий дополнительного сброса</div>
+  <div class="kv"><span>Модель</span><span>каскад линейных резервуаров</span></div>
+  <div class="kv"><span>Источник</span><span>треугольный гидрограф</span></div>
+  <div class="kv"><span>Объём V_b</span><span>1 551 м³</span></div>
+  <div class="kv"><span>Пик q_b,max</span><span>0,862 м³/с (t=20 мин)</span></div>
+  <div class="kv"><span>Фон Q₀</span><span>1,79 м³/с</span></div>
+  <div class="kv"><span>Шаг / горизонт</span><span>30 с / 12 ч</span></div>
+  <div class="kv"><span>Участки</span><span>6 × ~500 м, до 3 км</span></div>
+  <div class="kv"><span>Сценарий</span><span style="font-size:10px">area15510_drawdown010</span></div>
+  <div style="margin-top:8px;padding:8px 10px;background:rgba(49,201,255,.08);border:1px solid rgba(49,201,255,.25);border-radius:8px;font-size:11px;line-height:1.5">
+    Реализовано строго по «Перовка_ИТОГ_расчёт_и_пояснения.xlsx»:
+    Sᵢⁿ⁺¹ = (Sᵢⁿ + IᵢΔt)/(1+Δt/τᵢ), Oᵢ = Sᵢ/τᵢ, τᵢ=Lᵢ/c.
+    Подписи у точек маршрута показывают полный расход Qᵢ=Q₀+Oᵢ.
+    <div style="color:#ffb02e;margin-top:4px">Не инженерный прогноз прорыва; зона затопления не строилась.</div>
+  </div>`;
+}
+
+function updateChartRelease(res){
+  if (!S.chartPower) return;
+  const R = res.tau.length;
+  const step = 10;                       // каждые 5 мин
+  const labels = [], colors = ['#31c9ff','#3ddc84','#ffb02e','#ff8a3d','#ff5a5a','#ff3b3b'];
+  const ds = [];
+  for (let n = 0; n <= res.steps; n += step){
+    const t = n * res.dt;
+    labels.push(Math.floor(t/60) + 'м');
+  }
+  for (let j = 0; j < R; j++){
+    const data = [];
+    for (let n = 0; n <= res.steps; n += step) data.push(+(res.bg + res.out[n * R + j]).toFixed(4));
+    ds.push({ label: `Q${j+1} (${RELEASE.points[j+1][0]} м), м³/с`, data,
+      borderColor: colors[j], borderWidth: j === R-1 ? 2.2 : 1.2, tension: .25, fill: false, pointRadius: 0 });
+  }
+  const cp = S.chartPower;
+  cp.data.labels = labels;
+  cp.data.datasets = ds;
+  cp.options.scales.y.title.text = 'Расход, м³/с';
+  cp.options.plugins.tooltip.callbacks = { label: ctx => ctx.parsed.y.toFixed(4)+' м³/с' };
+  cp.update('none');
+  S.chartLevel.data.labels = [];
+  S.chartLevel.data.datasets = [];
+  S.chartLevel.update('none');
 }
 
 /* ============================================================
@@ -925,6 +1101,7 @@ function getWaveParams(h){
   }
   base.maxDist  = Math.round(base.maxDist  * WAVE_SCALE);
   base.maxWidth = Math.round(base.maxWidth * WAVE_SCALE);
+  if (a < 150) base.maxWidth = Math.min(base.maxWidth, 260);   // малые ГЭС: волна не шире ~260 м
   return base;
 }
 
@@ -948,7 +1125,9 @@ function makeBandPolygon(centerline, widths, latRef){
       (centerline[i][1]-centerline[i-1][1])/degLon);
   }
   const segAvg = Math.max(10, segSum/Math.max(1, n-1));
-  const winPts = Math.max(3, Math.round((maxW * 0.55) / segAvg));
+  /* локальная ширина — медиана по сегменту, окно сглаживания ≈ 45% от неё */
+  const locW = widths[Math.floor(n/2)] || maxW;
+  const winPts = Math.max(3, Math.round((locW * 0.45) / segAvg));
 
   const sm = new Array(n);
   const halfW2 = Math.floor(winPts/2);
@@ -996,6 +1175,24 @@ function chaikinSmooth(course, iterations=1){
   }
   return pts;
 }
+function smoothRing(ring, iterations=1){
+  if (!ring || ring.length < 4) return ring;
+  const closed = ring[0][0]===ring[ring.length-1][0] && ring[0][1]===ring[ring.length-1][1];
+  const base = closed ? ring.slice(0,-1) : ring;
+  let out = base;
+  for (let it=0; it<iterations; it++){
+    const n = out.length;
+    const res = [];
+    for (let i=0;i<n;i++){
+      const p0=out[i], p1=out[(i+1)%n], pm=out[(i-1+n)%n];
+      res.push([0.5*pm[0]+0.5*p0[0], 0.5*pm[1]+0.5*p0[1]]);
+      res.push([0.5*p0[0]+0.5*p1[0], 0.5*p0[1]+0.5*p1[1]]);
+    }
+    out = res;
+  }
+  if (closed) out.push(out[0]);
+  return out;
+}
 
 function makeFloodWaveFromCourse(h, course, progress){
   /* progress 0..1. Фронт движется вдоль реки с ПОСТОЯННОЙ скоростью (без
@@ -1013,9 +1210,9 @@ function makeFloodWaveFromCourse(h, course, progress){
   if (frontLen < 250) return null;
   let trimmed = trimCourse(course, frontLen);
   if (trimmed.length < 2) return null;
-  trimmed = chaikinSmooth(trimmed, 2);
+  trimmed = chaikinSmooth(trimmed, 3);
   const n = trimmed.length;
-  const W = params.maxWidth * ramp * (0.45 + 0.55 * decay);
+  const W = Math.min(params.maxWidth, 300) * ramp * (0.45 + 0.55 * decay);
   const widths = trimmed.map((_, i) => {
     const s = n > 1 ? i/(n-1) : 0;             // 0 — плотина, 1 — фронт
     const taper = 1 - 0.6 * Math.pow(s, 0.85); // затухание к переднему краю
@@ -1200,7 +1397,7 @@ function simulateDamBreak(h, course, elev){
       let front = 0, hmax = 0;
       const wArr = new Float32Array(N+1);
       for (let k=0;k<=N;k++){
-        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, h.visMinW ? h.visMinW*4 : 500)) : 0;
+        wArr[k] = Hd[k] > 0.05 ? Math.min(wCell[k] + 2*mSide*Hd[k], Math.max(wCell[k]*3.5, h.visMinW ? h.visMinW : 40)) : 0;
         if (Hd[k] > 0.05){ front = k; if (Hd[k] > hmax) hmax = Hd[k]; }
         if (wArr[k] > maxW[k]) maxW[k] = wArr[k];
       }
@@ -1255,7 +1452,7 @@ async function startDamBreak(){
     while (maxK > 1 && sim.maxW[maxK] < 1) maxK--;
     maxK = Math.max(maxK, 2);
     const footPts = makeBandPolygon(
-      chaikinSmooth(sim.line.slice(0, maxK + 1), 1),
+      chaikinSmooth(sim.line.slice(0, maxK + 1), 2),
       Array.from(visWidths(sim.maxW.slice(0, maxK + 1), visFloor(h))), h.lat);
 
     /* перенос и зум на зону прорыва, чтобы волну было видно */
@@ -1300,7 +1497,7 @@ async function startDamBreak(){
       if (upto > 1){
         const lineTrim = sim.line.slice(0, upto + 1);
         const wTrim = Array.from(visWidths(fr.w.slice(0, upto + 1), visFloor(h)));
-        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 1), wTrim, h.lat);
+        const pts = makeBandPolygon(chaikinSmooth(lineTrim, 2), wTrim, h.lat);
         const depth = Math.min(1, fr.hmax / 15);
         polyAdd(layerFlood, pts, {
           color:'#ff3b3b', weight:1.5, opacity:0.85,
@@ -1348,7 +1545,7 @@ async function startDamBreak(){
   }, 400);
   const duration = Math.max(12, params.baseDuration * 1.25);
   S.damBreak = { id:h.id, progress:0, start:performance.now(), duration, course };
-  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению`;
+  $('alertBanner').innerHTML = `💥 ПРОРЫВ ПЛОТИНЫ · ${params.type} волна · затопление ${(courseLength(course)/1000).toFixed(0)} км вниз по течению` + (SHOW_DECORATIVE_WAVE?'':' · волна не отрисовывается');
   $('alertBanner').classList.add('show');
 
   recompute(); render();
@@ -1359,23 +1556,7 @@ async function startDamBreak(){
     const elapsed = (t - S.damBreak.start)/1000;
     S.damBreak.progress = Math.min(1, elapsed / S.damBreak.duration);
     clear(layerFlood);
-
-    const wave = makeFloodWaveFromCourse(h, course, S.damBreak.progress);
-    if (wave){
-      const fade = wave.decay;
-      polyAdd(layerFlood, wave.pts, {
-        color:'#ff3b3b', weight:1.5, opacity:0.8*fade + 0.1,
-        fill:'#ff5a5a', fillOpacity:0.30*fade
-      });
-      if (wave.decay > 0.05){
-        try {
-          L.circleMarker(wave.front, {
-            radius: 4 + 4*wave.decay, color:'#ff1a1a', weight:2.5, opacity:0.95*fade,
-            fillColor:'#ff5a5a', fillOpacity:0.9*fade, interactive:false
-          }).addTo(layerFlood);
-        } catch(e){ console.warn('front:', e.message); }
-      }
-    }
+    /* декоративная волна отключена (SHOW_DECORATIVE_WAVE = false) — не рисуем полигон */
     render();
     if (S.damBreak.progress < 1) requestAnimationFrame(step);
     else setTimeout(() => {
@@ -1435,7 +1616,7 @@ function drawReservoir(h, i, lf, overtop){
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
     const group = L.layerGroup();
     rings.forEach(ring => {
-      polyAdd(group, ring, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+      polyAdd(group, smoothRing(ring, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
     });
     group.addTo(layerRes);
     S.reservoirs[h.id] = group;
@@ -1449,7 +1630,7 @@ function drawReservoir(h, i, lf, overtop){
     const group = L.layerGroup();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
-        polyAdd(group, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+        polyAdd(group, smoothRing(pts, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
       });
     });
     group.addTo(layerRes);
@@ -1528,9 +1709,10 @@ function buildUI(){
       const sc = btn.dataset.scen;
       document.querySelectorAll('.scenBtn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      if (sc === 'dam_break'){ S.scenario = 'dam_break'; startDamBreak(); }
+      if (sc === 'dam_break'){ stopRelease(); S.scenario = 'dam_break'; startDamBreak(); }
+      else if (sc === 'release'){ stopDamBreak(); S.scenario = 'release'; startRelease(); }
       else {
-        stopDamBreak();
+        stopDamBreak(); stopRelease();
         S.scenario = sc;
         recompute(); render();
         if (S.selected){
@@ -1542,26 +1724,39 @@ function buildUI(){
     };
   });
 
-  const ctx = $('chart').getContext('2d');
-  S.chart = new Chart(ctx, {
-    type:'line',
-    data:{ labels:[], datasets:[] },
-    options:{
-      responsive:true, maintainAspectRatio:false, animation:false,
-      interaction:{ mode:'index', intersect:false },
-      elements:{ point:{ radius:0 } },
-      plugins:{
-        legend:{ labels:{ color:'#8ba0b6', boxWidth:10, font:{size:10} } },
-        tooltip:{ backgroundColor:'rgba(16,22,30,.95)', borderColor:'#2a3644', borderWidth:1,
-          titleColor:'#dbe6f2', bodyColor:'#dbe6f2', padding:8 }
-      },
-      scales:{
-        x:{ ticks:{ color:'#6d8199', maxTicksLimit:7, font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' } },
-        y:{ position:'left', ticks:{ color:'#31c9ff', font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' } },
-        y1:{ position:'right', ticks:{ color:'#ffb02e', font:{size:9} }, grid:{ drawOnChartArea:false } }
+  const baseOpts = {
+    type:'line', maintainAspectRatio:false, animation:false,
+    interaction:{ mode:'index', intersect:false },
+    elements:{ point:{ radius:0 } },
+    plugins:{
+      legend:{ display:false },
+      tooltip:{
+        backgroundColor:'rgba(16,22,30,.95)', borderColor:'#2a3644', borderWidth:1,
+        titleColor:'#dbe6f2', bodyColor:'#dbe6f2', padding:8, font:{size:11}
       }
+    },
+    scales:{
+      x:{ display:false, ticks:{ color:'#6d8199', maxTicksLimit:6, font:{size:8} }, grid:{ color:'rgba(255,255,255,.04)' } },
+      y:{ position:'left', ticks:{ color:'#dbe6f2', font:{size:9} }, grid:{ color:'rgba(255,255,255,.05)' },
+        title:{ display:true, color:'#8ba0b6', font:{size:10} } }
     }
-  });
+  };
+  const cp = $('chartPowerC').getContext('2d');
+  S.chartPower = new Chart(cp, Object.assign({}, baseOpts, {
+    data:{ labels:[], datasets:[] },
+    options: Object.assign({}, baseOpts, { plugins: Object.assign({}, baseOpts.plugins, { tooltip:{ enabled:false } }),
+      scales: Object.assign({}, baseOpts.scales, { y: Object.assign({}, baseOpts.scales.y, { title:{ display:true, text:'Мощность' } }) }) })
+  }));
+  const cl = $('chartLevelC').getContext('2d');
+  S.chartLevel = new Chart(cl, Object.assign({}, baseOpts, {
+    data:{ labels:[], datasets:[] },
+    options: Object.assign({}, baseOpts, {
+      scales: Object.assign({}, baseOpts.scales, {
+        x: Object.assign({}, baseOpts.scales.x, { display:true }),
+        y: Object.assign({}, baseOpts.scales.y, { title:{ display:true, text:'Уровень ВБ, м' } })
+      })
+    })
+  }));
 
   document.querySelectorAll('#modeTabs button').forEach(btn => {
     btn.onclick = async () => {
@@ -1569,7 +1764,7 @@ function buildUI(){
       document.querySelectorAll('#modeTabs button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       S.mode = btn.dataset.mode;
-      stopDamBreak();
+      stopDamBreak(); stopRelease();
       S.scenario = 'normal';
       document.querySelectorAll('.scenBtn').forEach(b => b.classList.toggle('active', b.dataset.scen === 'normal'));
       await loadPeriod(S.mode);
@@ -1665,7 +1860,9 @@ async function selectHPP(id, fromList){
   if (map){
     if (fromList) panToStation(h);
     /* попап — после панорамы (Leaflet попапы зум не закрывает, так рисуется чище) */
-    setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); }, fromList ? 800 : 0);
+    if (S.scenario !== 'release'){
+      setTimeout(() => { const m = S.markers[id]; if (m) m.openPopup(); }, fromList ? 800 : 0);
+    }
   }
 
   if (!S.cache[S.mode]?.[id] && !S.loadingStation[id] && apiAvailable !== false){
@@ -1756,8 +1953,31 @@ function detailsHTML(h){
   </div>`;
 }
 
+function fmtAxisPower(v){
+  if (!v) return '0 кВт';
+  return v >= 1 ? v.toFixed(0)+' МВт' : (v*1000).toFixed(0)+' кВт';
+}
+
+/* Скользящее среднее — убирает резкие скачки на циклических графиках
+   климатического режима (заполнение-слив водохранилища по месяцам). */
+function movingAverage(data, win){
+  if (!win || win < 2) return data.slice();
+  const out = [];
+  const half = Math.floor(win/2);
+  for (let i=0;i<data.length;i++){
+    let s=0, c=0;
+    for (let j=Math.max(0,i-half); j<=Math.min(data.length-1,i+half); j++){
+      s += data[j]; c++;
+    }
+    out.push(s/c);
+  }
+  return out;
+}
+
 function updateChart(){
-  if (!S.selected || !S.chart) return;
+  if (!S.chartPower || !S.chartLevel) return;
+  if (S.scenario === 'release' && S.release){ return; }
+  if (!S.selected) return;
   const now = performance.now();
   if (now - S.lastChartUpdate < CHART_THROTTLE_MS) return;
   S.lastChartUpdate = now;
@@ -1768,21 +1988,48 @@ function updateChart(){
 
   const i = S.idx, W = CHART_WINDOW;
   const a = Math.max(0, i-W), b = Math.min(S.dates.length, i+W);
-  const labels=[], pw=[], lv=[], qq=[];
+  const labels=[], pw=[], lv=[];
   for (let k=a;k<b;k++){
     labels.push(S.dates[k].slice(5));
-    pw.push(+r.power[k].toFixed(1));
+    pw.push(+r.power[k].toFixed(2));
     lv.push(+r.level[k].toFixed(2));
-    const c = S.cache[S.mode]?.[S.selected];
-    qq.push(c ? +(c.hydro.q[k]||0).toFixed(0) : 0);
   }
-  S.chart.data.labels = labels;
-  S.chart.data.datasets = [
-    { label:'Мощность, МВт', data:pw, borderColor:'#31c9ff', backgroundColor:'rgba(49,201,255,.12)', borderWidth:1.6, fill:true, yAxisID:'y', tension:.25 },
-    { label:'Уровень ВБ, м', data:lv, borderColor:'#ffb02e', borderWidth:1.4, yAxisID:'y1', tension:.25 },
-    { label:'Приток, м³/с', data:qq, borderColor:'#3ddc84', borderWidth:1, borderDash:[3,3], yAxisID:'y1', tension:.25, hidden:true }
-  ];
-  S.chart.update('none');
+
+  const cp = S.chartPower;
+  const cl = S.chartLevel;
+  /* Сглаживаем данные, чтобы график не скакал вертикально в режиме климата */
+  const pwS = movingAverage(pw, 5);
+  const lvS = movingAverage(lv, 5);
+  cp.data.labels = labels;
+  cp.data.datasets = [{
+    data:pwS, borderColor:'#31c9ff', backgroundColor:'rgba(49,201,255,.06)',
+    borderWidth:1.6, fill:false, tension:.15,
+  }];
+  cp.options.scales.y.title.text = h.notHPP ? 'Мощность — нет ГЭС' : 'Мощность';
+  cp.options.plugins.tooltip.callbacks = {
+    label: ctx => fmtAxisPower(ctx.parsed.y) + (h.notHPP?' (нет ГЭС)':'')
+  };
+  /* Фиксированный вертикальный масштаб мощности — линия не касется краёв графика */
+  const pMax = Math.max(h.capacityMW || 0, ...pw) * 1.15;
+  cp.options.scales.y.min = 0;
+  cp.options.scales.y.max = pMax > 0 ? pMax : 1;
+  cp.update('none');
+
+  cl.data.labels = labels;
+  cl.data.datasets = [{
+    data:lvS, borderColor:'#ffb02e', backgroundColor:'rgba(255,176,46,.06)',
+    borderWidth:1.6, fill:false, tension:.15,
+  }];
+  cl.options.scales.y.title.text = 'Уровень ВБ, м';
+  /* Фиксированный вертикальный масштаб уровня: umo..nmu с отступом ±0.5 м */
+  const lMin = (h.umo != null ? h.umo : Math.min(...lvS)) - 0.5;
+  const lMax = (h.nmu != null ? h.nmu : Math.max(...lvS)) + 0.5;
+  cl.options.scales.y.min = lMin;
+  cl.options.scales.y.max = lMax;
+  cl.options.plugins.tooltip.callbacks = {
+    label: ctx => ctx.parsed.y.toFixed(2)+' м'
+  };
+  cl.update('none');
 }
 
 /* ============================================================
