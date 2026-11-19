@@ -47,7 +47,7 @@ const PRIORITY = ['krav','andr','pero','igla','rokk','alak'];
 const HISTORY_START = '2023-01-01';
 const CHART_WINDOW = 60;
 const CHART_THROTTLE_MS = 80;
-const SHOW_DECORATIVE_WAVE = false;   // декоративная волна (широкий коридор) отключена — только физическая модель Сен-Венана
+const SHOW_DECORATIVE_WAVE = false;   // декоративная волна (широкий коридор) отключена
 
 /* ============================================================
    НАСТРОЙКИ ВОЛНЫ
@@ -1245,7 +1245,7 @@ function makeFloodFootprint(h, course){
 
 /* ============================================================
    ФИЗИЧЕСКАЯ МОДЕЛЬ ПРОРЫВА ПЛОТИНЫ (1D)
-   Уравнения мелкой воды (Сен-Венана) вдоль реального русла:
+   Уравнения мелкой воды вдоль реального русла:
      ∂A/∂t + ∂Q/∂x = 0
      ∂Q/∂t + ∂(Q²/A + gA²/2B̄)/∂x = −gA·dz/∂x − g·n²·Q|Q|·A/(A·R^{4/3})
    Канал — трапеция (B(s) по дну, откос m=1:18), шероховатость Мэннинга
@@ -1438,10 +1438,10 @@ async function startDamBreak(){
   clear(layerFlood);
   clear(layerFloodZone);
 
-  /* ========= ФИЗИЧЕСКИЙ РЕЖИМ: уравнения Сен-Венана по реальному профилю ======== */
+  /* ========= ФИЗИЧЕСКИЙ РЕЖИМ: расчёт прорыва по реальному профилю ======== */
   const elev = (typeof RIVER_ELEV !== 'undefined') ? RIVER_ELEV[h.id] : null;
   if (elev && elev.length >= 10){
-    showStatusMsg('Расчёт прорыва: Сен-Венан 1D по профилю DEM…');
+    showStatusMsg('Расчёт прорыва по профилю DEM…');
     await sleep(30);
     const sim = simulateDamBreak(h, course, elev);
     if (!sim.frames.length){ showStatusMsg('Модель не дала волны'); return; }
@@ -1511,7 +1511,7 @@ async function startDamBreak(){
         } catch(e){ console.warn('front circle:', e.message); }
       }
       $('alertBanner').innerHTML =
-        `💥 ПРОРЫВ · Сен-Венан 1D · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
+        `💥 ПРОРЫВ · t+${fmtT(fr.t)} · фронт ${(fr.front*sim.ds/1000).toFixed(1)} км` +
         ` · глубина до ${fr.hmax.toFixed(1)} м · Q прорана ${fr.qsrc.toFixed(0)} м³/с` +
         (fr.pool > 0.05 ? ` · вдхр −${(sim.H0eff - fr.pool).toFixed(1)} м` : ' · вдхр пусто');
       render();
@@ -1584,6 +1584,8 @@ function drawReservoir(h, i, lf, overtop){
   if (S.reservoirs[h.id]){ layerRes.removeLayer(S.reservoirs[h.id]); delete S.reservoirs[h.id]; }
   const r = S.results[h.id];
   if (!r) return;
+  /* Водохранилище рисуется только для Перовской ГЭС — остальные без контура */
+  if (h.id !== 'pero') return;
 
   let color, fill, op;
   if (overtop){ color='#ff3b3b'; fill='#ff5252'; op=0.5; }
@@ -1615,8 +1617,9 @@ function drawReservoir(h, i, lf, overtop){
     const gn = Array.isArray(g) ? g : (g.n || []);
     const rings = Array.isArray(g) ? g : ([g.d, g.n, g.f][vi] || gn);
     const group = L.layerGroup();
+    /* Контуры по OSM рисуются как есть (без сглаживания), polyAdd сам замыкает кольцо */
     rings.forEach(ring => {
-      polyAdd(group, smoothRing(ring, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+      polyAdd(group, ring, { color: color, weight:2, opacity:0.95, fill: fill, fillOpacity: op });
     });
     group.addTo(layerRes);
     S.reservoirs[h.id] = group;
@@ -1630,7 +1633,7 @@ function drawReservoir(h, i, lf, overtop){
     const group = L.layerGroup();
     osmPolys.forEach(parts => {
       parts.forEach(pts => {
-        polyAdd(group, smoothRing(pts, 1), { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
+        polyAdd(group, pts, { color: color, weight:1.6, opacity:0.9, fill: fill, fillOpacity: op });
       });
     });
     group.addTo(layerRes);
@@ -1700,6 +1703,7 @@ function buildUI(){
     list.appendChild(item);
     createMarker(h);
   });
+  updateStationAvailability();
 
   $('slider').oninput = e => { S.idx = +e.target.value; render(); };
   $('playBtn').onclick = togglePlay;
@@ -1709,12 +1713,26 @@ function buildUI(){
       const sc = btn.dataset.scen;
       document.querySelectorAll('.scenBtn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      if (sc === 'reset'){
+        stopDamBreak(); stopRelease();
+        S.scenario = 'normal';
+        document.querySelector('.scenBtn[data-scen="normal"]').classList.add('active');
+        recompute(); render();
+        updateStationAvailability();
+        if (S.selected){
+          const h = HPPS.find(x => x.id === S.selected);
+          $('details').innerHTML = detailsHTML(h);
+          updateChart();
+        }
+        return;
+      }
       if (sc === 'dam_break'){ stopRelease(); S.scenario = 'dam_break'; startDamBreak(); }
       else if (sc === 'release'){ stopDamBreak(); S.scenario = 'release'; startRelease(); }
       else {
         stopDamBreak(); stopRelease();
         S.scenario = sc;
         recompute(); render();
+        updateStationAvailability();
         if (S.selected){
           const h = HPPS.find(x => x.id === S.selected);
           $('details').innerHTML = detailsHTML(h);
@@ -1723,6 +1741,35 @@ function buildUI(){
       }
     };
   });
+
+  /* При активном сценарии «Сброс» доступна только Перовская — остальные станции блокируются */
+  function updateStationAvailability(){
+    const isRelease = S.scenario === 'release';
+    document.querySelectorAll('.hppItem').forEach(el => {
+      const isPero = el.dataset.id === 'pero';
+      if (isRelease && !isPero){
+        el.classList.add('disabled');
+        el.style.opacity = '0.45';
+        el.style.pointerEvents = 'none';
+        el.title = 'Сценарий сброса активен только для Перовской МГЭС';
+      } else {
+        el.classList.remove('disabled');
+        el.style.opacity = '';
+        el.style.pointerEvents = '';
+        el.title = '';
+      }
+    });
+    /* Сценарии: при сбросе доступны только Норма, Сброс и Сброс настроек */
+    document.querySelectorAll('.scenBtn').forEach(b => {
+      if (isRelease && b.dataset.scen !== 'normal' && b.dataset.scen !== 'reset' && b.dataset.scen !== 'release'){
+        b.style.opacity = '0.45';
+        b.style.pointerEvents = 'none';
+      } else {
+        b.style.opacity = '';
+        b.style.pointerEvents = '';
+      }
+    });
+  }
 
   const baseOpts = {
     type:'line', maintainAspectRatio:false, animation:false,
@@ -1847,6 +1894,8 @@ function popupHTML(h, r, i, col, isBroken, overtop){
    ВЫБОР ГЭС
    ============================================================ */
 async function selectHPP(id, fromList){
+  /* При активном сценарии сброса переключение доступно только на Перовскую */
+  if (S.scenario === 'release' && id !== 'pero') return;
   S.selected = id;
   const h = HPPS.find(x => x.id === id);
   if (!h) return;
@@ -1882,6 +1931,7 @@ async function selectHPP(id, fromList){
     recompute(); render();
   }
 
+  /* Русло загружается для всех станций (нужно для прорыва), водохранилище — только для Перовской */
   if (!S.riverCourses[h.id] && !S.loadingRiver[h.id]){
     S.loadingRiver[h.id] = loadRiverCourse(h).then(c => {
       S.riverCourses[h.id] = c; delete S.loadingRiver[h.id];
@@ -1889,13 +1939,15 @@ async function selectHPP(id, fromList){
       return c;
     }).catch(() => { delete S.loadingRiver[h.id]; });
   }
-  const embeddedRes = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
-  if (!embeddedRes && !S.reservoirsOSM[h.id] && !S.loadingRes[h.id]){
-    S.loadingRes[h.id] = loadReservoirOSM(h).then(p => {
-      S.reservoirsOSM[h.id] = p; delete S.loadingRes[h.id];
-      if (S.selected === h.id) render();
-      return p;
-    }).catch(() => { S.reservoirsOSM[h.id] = []; delete S.loadingRes[h.id]; });
+  if (h.id === 'pero'){
+    const embeddedRes = (typeof RESERVOIR_GEOMETRY !== 'undefined') ? RESERVOIR_GEOMETRY[h.id] : null;
+    if (!embeddedRes && !S.reservoirsOSM[h.id] && !S.loadingRes[h.id]){
+      S.loadingRes[h.id] = loadReservoirOSM(h).then(p => {
+        S.reservoirsOSM[h.id] = p; delete S.loadingRes[h.id];
+        if (S.selected === h.id) render();
+        return p;
+      }).catch(() => { S.reservoirsOSM[h.id] = []; delete S.loadingRes[h.id]; });
+    }
   }
 
   if (S.scenario === 'dam_break') startDamBreak();
@@ -1947,7 +1999,7 @@ function detailsHTML(h){
     <div>${wp.description}</div>
     <div style="color:#8ba0b6;margin-top:4px">скорость ≈ ${wp.speedMs} м/с · ширина до ${(wp.maxWidth/1000).toFixed(1)} км</div>
     ${(typeof RIVER_ELEV !== 'undefined' && RIVER_ELEV[h.id]) ?
-      `<div style="color:#39d353;margin-top:4px">∿ расчёт: Сен-Венан 1D, профиль дна DEM, водосливная кривая прорана, n=0.035</div>` : ''}
+      `<div style="color:#39d353;margin-top:4px">∿ расчёт: профиль дна DEM, водосливная кривая прорана, n=0.035</div>` : ''}
     <div style="color:#8ba0b6;margin-top:2px;font-size:10px">${courseInfo}</div>
     <div style="color:#8ba0b6;font-size:10px">${resInfo}</div>
   </div>`;
