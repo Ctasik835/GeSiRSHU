@@ -2111,8 +2111,110 @@ function loop(t){
 /* ============================================================
    СТАРТ
    ============================================================ */
+/* ============================================================
+   ПЕРЕТАСКИВАНИЕ ОКЕН МЫШКОЙ
+   ============================================================ */
+function makeDraggable(element, handleSelector){
+  const el = $(element);
+  if(!el) return;  const handle = handleSelector ? el.querySelector(handleSelector) : el;
+  if(!handle) return;  el.classList.add('draggable');
+  handle.classList.add('draggable-handle');
+
+  let isDragging=false, startX=0, startY=0, startLeft=0, startTop=0;
+
+  const onDown=(e)=>{
+    if(e.button!==0) return;
+    isDragging=true;
+    startX=e.clientX; startY=e.clientY;
+    const r=el.getBoundingClientRect();
+    startLeft=r.left; startTop=r.top;
+    el.style.right=''; el.style.bottom='';
+    el.style.position='absolute';
+    el.style.left=startLeft+'px'; el.style.top=startTop+'px';
+    el.style.zIndex='10000';
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    e.preventDefault();
+  };
+  const onMove=(e)=>{
+    if(!isDragging) return;
+    el.style.left=(startLeft+(e.clientX-startX))+'px';
+    el.style.top=(startTop+(e.clientY-startY))+'px';
+  };
+  const onUp=()=>{
+    isDragging=false;
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('mouseup',onUp);
+  };
+  handle.addEventListener('mousedown',onDown);
+}
+
+function makeResizable(element, minW=150, minH=100){
+  const el = $(element);
+  if(!el) return;
+  el.style.position='absolute';
+  ['tl','tr','bl','br'].forEach(pos=>{
+    const resizer = document.createElement('div');
+    resizer.className = 'resizer '+pos;
+    el.appendChild(resizer);
+    resizer.addEventListener('mousedown',e=>{
+      if(e.button!==0) return;
+      e.preventDefault(); e.stopPropagation();
+      const cs=getComputedStyle(el);
+      let startW=parseFloat(cs.width)||el.offsetWidth;
+      let startH=parseFloat(cs.height)||el.offsetHeight;
+      let startL=parseFloat(cs.left)||el.offsetLeft;
+      let startT=parseFloat(cs.top)||el.offsetTop;
+      let sx=e.clientX, sy=e.clientY;
+      let dragging=true;
+      const onMove=(ev)=>{
+        if(!dragging) return;
+        const dx=ev.clientX-sx, dy=ev.clientY-sy;
+        if(pos.includes('tl')||pos.includes('bl')){
+          let nw=startW-dx;
+          let nL=startL+dx;
+          if(nw<minW){ nL+=nW-minW; nw=minW; }
+          el.style.left=nL+'px'; el.style.width=nw+'px';
+        } else {
+          el.style.width=Math.max(minW,startW+dx)+'px';
+        }
+        if(pos.includes('tl')||pos.includes('tr')){
+          let nh=startH-dy;
+          let nT=startT+dy;
+          if(nh<minH){ nT+=nh-minH; nh=minH; }
+          el.style.top=nT+'px'; el.style.height=nh+'px';
+        } else {
+          el.style.height=Math.max(minH,startH+dy)+'px';
+        }
+      };
+      const onUp=()=>{ dragging=false; document.removeEventListener('mousemove',onMove); document.removeEventListener('mouseup',onUp); };
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+    });
+  });
+}
+
+function makeWindowsDraggable(){
+  ['sidebar','chartPanel'].forEach(id=>{
+    const el=$(id);
+    if(el){
+      el.querySelectorAll('.resizer').forEach(r=>r.remove());
+      el.style.position='absolute';
+    }
+  });
+  makeDraggable('sidebar','header:first-of-type');
+  makeResizable('sidebar', 200, 200);
+  makeDraggable('chartPanel','.head');
+  makeResizable('chartPanel', 250, 150);
+  makeDraggable('topbar');
+  makeDraggable('timeline');
+  makeDraggable('alertBanner');
+  makeDraggable('statusBar');
+}
+
 (async function boot(){
   buildUI();
+  makeWindowsDraggable();
   try { await loadPeriod('history'); }
   catch(e){ console.error('Ошибка:', e); setStatus('<span class="err">ошибка: '+e.message+'</span>'); }
 })();
