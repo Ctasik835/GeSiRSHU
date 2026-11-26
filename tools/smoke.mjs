@@ -49,11 +49,20 @@ const brief = e => String((e && (e.stack || e.message)) || e).split('\n')
   .filter(l => !/chart\.umd|leaflet\.js|runtime-script-errors|EventTarget-impl|Window\.js/.test(l))
   .slice(0, 3).join(' | ');
 const vc = new VirtualConsole();
-vc.on('jsdomError', e => errors.push('jsdomError: ' + brief(e)));
+/* attempts of navigation — это НЕ ошибка приложения: location.reload() в jsdom
+   всегда «Not implemented», и именно так мы видим, что перезагрузка вызвана */
+let navAttempts = 0;
+vc.on('jsdomError', e => {
+  const m = brief(e);
+  if (/Not implemented: navigation/.test(m)){ navAttempts++; return; }
+  errors.push('jsdomError: ' + m);
+});
 vc.on('error', (...a) => errors.push('console.error: ' + a.join(' ').slice(0, 200)));
 vc.on('warn', (...a) => warns.push(a.join(' ')));
-process.on('uncaughtException', e => errors.push('uncaught: ' + brief(e)));
-process.on('unhandledRejection', e => errors.push('rejection: ' + brief(e)));
+/* эти обработчики мешают процессу упасть — значит, они ОБЯЗАНЫ напечатать
+   причину сразу, иначе ошибка самого стенда выглядит как «тихий успех» */
+process.on('uncaughtException', e => { console.log('!! ошибка стенда:', brief(e)); errors.push('uncaught: ' + brief(e)); });
+process.on('unhandledRejection', e => { console.log('!! ошибка стенда (rejection):', brief(e)); errors.push('rejection: ' + brief(e)); });
 
 let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 html = html
@@ -141,17 +150,64 @@ const dom = new JSDOM(html, {
       return Promise.reject(new TypeError('нет сети для ' + u.slice(0, 60)));
     };
 
+    /* --- service worker: управляемая подделка. Нужна, чтобы проверить плашку
+       «Доступна новая версия»: её показ теперь зависит от того, остался ли
+       воркер в reg.waiting (т.е. install НЕ дошёл до skipWaiting). --- */
+    const mkTarget = () => {
+      const o = { _h: {}, addEventListener(t, cb){ (o._h[t] = o._h[t] || []).push(cb); },
+                  removeEventListener(){}, fire(t, ev){ (o._h[t]||[]).forEach(cb => cb(Object.assign({type:t}, ev||{}))); } };
+      return o;
+    };
+    const swReg = mkTarget(), swWorker = mkTarget();
+    swReg.installing = null; swReg.waiting = null;
+    const posts = [];
+    swWorker.postMessage = m => posts.push(m);
+    const reloads = { n: 0 };
+    window.__sw = {
+      reg: swReg, worker: swWorker, posts, reloads,
+      /* install отработал и вызвал skipWaiting: воркер активировался сам,
+         reg.waiting остаётся null → показывать кнопку не за чем */
+      settledInstalled(){
+        swReg.installing = swWorker; swReg.waiting = null;
+        swWorker.state = 'installed';
+        swReg.fire('updatefound');          // браузер именно так и сообщает
+        swWorker.fire('statechange');
+        swReg.installing = null;
+        swWorker.state = 'activated';
+        window.navigator.serviceWorker.fire('controllerchange');
+      },
+      /* install застрял (не дошёл до skipWaiting): reg.waiting != null —
+         единственный случай, когда пользователю действительно нужна кнопка */
+      stuckWaiting(){
+        swReg.installing = swWorker; swReg.waiting = swWorker;
+        swWorker.state = 'installed';
+        swReg.fire('updatefound');
+        swWorker.fire('statechange');
+      }
+    };
     try { delete window.navigator.serviceWorker; } catch(e){}
+    const swIface = Object.assign(mkTarget(), { register: () => Promise.resolve(swReg), controller: null });
+    window.__sw.swTarget = swIface;
+    Object.defineProperty(window.navigator, 'serviceWorker', { configurable: true, value: swIface });
     Object.defineProperty(window, 'innerWidth', { value: NARROW ? 420 : 1440, configurable: true });
     Object.defineProperty(window, 'innerHeight', { value: NARROW ? 780 : 900, configurable: true });
     window.matchMedia = q => ({
       matches: /max-width:\s*900px/.test(q) ? NARROW : /prefers-reduced-motion/.test(q) ? REDUCE : false,
       media: q, addEventListener(){}, removeEventListener(){}, addListener(){}, removeListener(){}
     });
+    const W_BY_ID = { sidebar: 330, chartPanel: 450, statusBar: 210 };
     window.Element.prototype.getBoundingClientRect = function(){
-      const w = this.id === 'sidebar' ? 330 : this.id === 'chartPanel' ? 450 : 240;
-      return { left: 12, top: 64, right: 12 + w, bottom: 300, width: w, height: 236, x: 12, y: 64 };
+      /* учёт inline left/top: без этого перетаскивание окон не проверить —
+         makeDraggable читает геометрию именно этим методом */
+      const num = v => (typeof v === 'string' && /px$/.test(v)) ? parseFloat(v) : NaN;
+      const st = this.style || {};
+      const left = isNaN(num(st.left)) ? 12 : num(st.left);
+      const top  = isNaN(num(st.top)) ? 64 : num(st.top);
+      const w = W_BY_ID[this.id] || 240;
+      return { left, top, right: left + w, bottom: top + 236, width: w, height: 236, x: left, y: top };
     };
+    window.Element.prototype.setPointerCapture = window.Element.prototype.setPointerCapture || function(){};
+    window.Element.prototype.releasePointerCapture = window.Element.prototype.releasePointerCapture || function(){};
     window.ResizeObserver = class { observe(){} unobserve(){} disconnect(){} };
     /* jsdom запрещает localStorage на file:// (opaque origin) — а приложению он
        нужен: кэш снимка, раскладка окон и намерение «графики скрыты». Без стаба
@@ -185,6 +241,14 @@ function check(name, cond, extra){
   if (!cond) failed++;
   console.log((cond ? 'ok   ' : 'FAIL ') + name + (extra !== undefined ? '  → ' + String(extra).slice(0, 150) : ''));
 }
+
+/* Страховка: обработчики ниже ловят uncaught/unhandled и не дают процессу
+   упасть — без таймера стенд мог бы висеть вместо того, чтобы показать провал. */
+const watchdog = setTimeout(() => {
+  console.error('\nТАЙМАУТ: стенд не дошёл до конца (см. errors ниже)');
+  console.log(errors.slice(0, 3).join('\n'));
+  process.exit(1);
+}, 100000);
 
 await wait(900);
 
@@ -328,6 +392,13 @@ click(q('.scenBtn[data-scen="reset"]'));
 await wait(400);
 
 /* ---------- учебный сброс ---------- */
+/* подглядываем за созданием поповера: L.popup возвращает объект, у которого
+   потом проверяем offset (именно он отвечает «над маркером окно или под») */
+const popups = [];
+{
+  const orig = window.L.popup;
+  window.L.popup = function(...a){ const p = orig.apply(this, a); popups.push(p); return p; };
+}
 const t0 = Date.now();
 click(q('.scenBtn[data-scen="release"]'));
 await wait(1400);
@@ -341,14 +412,109 @@ check('сброс: в баннере числа нормальные', /м³\/с
   q('#alertBanner').textContent.slice(0, 70).replace(/\s+/g, ' '));
 check('сброс: остальные станции заблокированы', qa('.hppItem:disabled').length === 5, qa('.hppItem:disabled').length);
 check('сброс: паспорт станции с балансом', /Баланс воды/.test(q('#details').textContent) && !/NaN/.test(q('#details').textContent));
+{
+  await wait(900);                     // окно открывается по таймеру через 1 с после старта
+  const pop = popups[popups.length - 1];
+  check('сброс: окно у плотины открыто', !!pop && !!q('#map .leaflet-popup'),
+    'поповеров создано: ' + popups.length);
+  const oy = pop ? (pop.options.offset[1] ?? null) : null;
+  /* Leaflet цепляет контейнер за НИЖНИЙ край (style.bottom = -(y + offset.y)),
+     поэтому «под маркером» = offset.y не меньше высоты самого окна */
+  const h = pop && pop._container ? pop._container.getBoundingClientRect().height : 0;
+  check('сброс: окно ПОД маркером (смещено на собственную высоту, а не вверх)',
+    oy !== null && oy >= h && oy > 0, 'offset.y=' + oy + ' · высота окна=' + h);
+  check('сброс: у окна перевёрнутый хвост (класс pop-under)',
+    !!(pop && pop._container && /pop-under/.test(pop._container.className)),
+    pop && pop._container && pop._container.className);
+  check('сброс: позиция пересчитана Leaflet-ом (bottom = -(y + offset.y))',
+    !!(pop && pop._container) &&
+    Math.abs(parseFloat(pop._container.style.bottom) + (pop._map.latLngToLayerPoint(pop.getLatLng()).y + oy)) < 2,
+    pop && pop._container && 'bottom=' + pop._container.style.bottom + ' · offset.y=' + oy);
+  check('сброс: окно привязано к точке плотины',
+    !!(pop && Math.abs(pop.getLatLng().lat - 60.67992) < 1e-3), pop && JSON.stringify(pop.getLatLng()));
+}
 check('сброс: анимация не роняет страницу', Date.now() - t0 > 1000 && errors.length === 0,
   'elapsed=' + (Date.now() - t0) + 'мс · ошибок: ' + errors.length);
 click(q('.scenBtn[data-scen="normal"]'));
 await wait(400);
 check('сброс выключен: блок снят', qa('.hppItem:disabled').length === 0);
+check('сброс выключен: окно плотины закрыто', !q('#map .leaflet-popup'),
+  q('#map .leaflet-popup') ? 'поповер всё ещё на карте' : 'нет поповера');
 check('сброс выключен: график вернулся на мощность',
   (chart('chartPowerC')?.data.datasets.length || 0) === 1 &&
   chart('chartPowerC').options.plugins.legend.display === false);
+
+/* ---------- статус-окно: перетаскивание и возврат ---------- */
+if (NARROW){
+  /* на узких экранах статус-окно сознательно display:none (его роль играет
+     #mobileBar), а makeDraggable там ничего не двигает — проверяем, что
+     перетаскивание не оставляет «призрачной» позиции */
+  check('на узком экране статус скрыт и не таскается',
+    !q('#statusBar').classList.contains('dragging') && !q('#statusBar').style.left,
+    'left=' + JSON.stringify(q('#statusBar').style.left));
+} else {
+  const sb = q('#statusBar');
+  const rectBefore = { left: sb.style.left, top: sb.style.top };
+  const pe = (type, x, y) => {
+    const ev = new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+    Object.defineProperty(ev, 'pointerId', { value: 1 });
+    Object.defineProperty(ev, 'button', { value: 0 });
+    return ev;
+  };
+  const r0 = sb.getBoundingClientRect();
+  const grab = [r0.left + 30, r0.top + 8];
+  sb.dispatchEvent(pe('pointerdown', grab[0], grab[1]));
+  sb.dispatchEvent(pe('pointermove', grab[0] + 860, grab[1] + 330));
+  sb.dispatchEvent(pe('pointerup', grab[0] + 860, grab[1] + 330));
+  const saved = JSON.parse(window.__store.get('ges_layout_v1') || '{}').statusBar;
+  check('статус-окно перетаскивается за любую точку кроме кнопки',
+    sb.style.left !== rectBefore.left && sb.style.top !== rectBefore.top && !!saved,
+    'inline: left=' + (sb.style.left || 'нет') + ' top=' + (sb.style.top || 'нет') + ' (тащили на +860/+330) ·' +
+    ' · сохранено: ' + JSON.stringify(saved && { left: Math.round(saved.left), top: Math.round(saved.top), moveOnly: saved.moveOnly }));
+  check('перетащенное окно не закреплено по размеру (текст статуса живой)',
+    sb.style.width === '' && sb.style.height === '',
+    'width=' + JSON.stringify(sb.style.width) + ' height=' + JSON.stringify(sb.style.height));
+  check('окно осталось в пределах экрана (clamp)',
+    saved && saved.left >= 8 && saved.top >= 8 &&
+    saved.left + saved.w <= 1440 - 8 && saved.top + saved.h <= 900 - 8,
+    saved && JSON.stringify({ l: Math.round(saved.left), t: Math.round(saved.top), w: Math.round(saved.w), h: Math.round(saved.h) }));
+
+  /* за край экрана выпустить нельзя */
+  sb.dispatchEvent(pe('pointerdown', grab[0], grab[1]));
+  sb.dispatchEvent(pe('pointermove', 9000, 9000));
+  sb.dispatchEvent(pe('pointerup', 9000, 9000));
+  {
+    const r = sb.getBoundingClientRect();
+    const saved2 = JSON.parse(window.__store.get('ges_layout_v1') || '{}').statusBar;
+    check('окно нельзя утащить за край экрана (clamp на отпускании)',
+      !!saved2 && saved2.left + saved2.w <= 1440 - 8 && saved2.top + saved2.h <= 900 - 8 && saved2.left >= 8,
+      saved2 ? 'left=' + Math.round(saved2.left) + ' top=' + Math.round(saved2.top) +
+               ' (right=' + Math.round(r.right) + ')' : 'позиция не сохранена');
+  }
+
+  /* кнопка ⟳ внутри окна — не ручка перетаскивания */
+  const rb = q('#refreshBtn');
+  const before = sb.style.left;
+  rb.dispatchEvent(pe('pointerdown', 1100, 200));
+  rb.dispatchEvent(pe('pointermove', 800, 600));
+  rb.dispatchEvent(pe('pointerup', 800, 600));
+  check('⟳ не перетаскивает окно (клик по кнопке остаётся кликом)', sb.style.left === before,
+    before + ' → ' + sb.style.left);
+
+  /* двойной клик — возврат на место */
+  const dbl = new window.MouseEvent('dblclick', { bubbles: true, cancelable: true });
+  Object.defineProperty(dbl, 'target', { value: sb });
+  sb.dispatchEvent(dbl);
+  check('двойной клик возвращает окно в CSS-позицию',
+    sb.style.left === '' && sb.style.top === '' && sb.style.position === '',
+    'left=' + JSON.stringify(sb.style.left) + ' position=' + JSON.stringify(sb.style.position));
+  check('после возврата запись о позиции удалена из ges_layout_v1',
+    !JSON.parse(window.__store.get('ges_layout_v1') || '{}').statusBar,
+    window.__store.get('ges_layout_v1'));
+  check('манипуляции с окном не сломали статус',
+    /history|forecast|climate|онлайн|офлайн|кэш/i.test(q('#statusText').textContent) &&
+    !/NaN|undefined/.test(q('#statusText').textContent), q('#statusText').textContent.slice(0, 60));
+}
 
 /* ---------- смена режима ---------- */
 click(q('#modeTabs button[data-mode="forecast"]'));
@@ -368,10 +534,44 @@ await wait(120);
 click(q('#panelToggle'));
 check('тумблер панелей и Esc не валят страницу', errors.length === 0, errors.slice(0, 1).join(''));
 
+/* ---------- плашка «Доступна новая версия» ---------- */
+{
+  const btn = q('#updateReady');
+  check('плашка обновления скрыта по умолчанию', btn.hidden === true);
+  /* случай 1: обычный — install сам вызывает skipWaiting (см. sw.js), а оболочка
+     отдаётся network-first → перезагрузка не нужна, кнопка показывать нечего */
+  window.__sw.settledInstalled();
+  await wait(2000);
+  check('после штатной активации SW кнопка НЕ появляется', q('#updateReady').hidden === true,
+    'waiting=' + JSON.stringify(window.__sw.reg.waiting) + ' · posts=' + window.__sw.posts.length);
+
+  /* случай 2: воркер реально застрял в waiting */
+  window.__sw.stuckWaiting();
+  await wait(2000);
+  check('если SW застрял в waiting — кнопка появляется', q('#updateReady').hidden === false);
+
+  /* клик: сначала skipWaiting сообщением, затем ровно одна перезагрузка
+     (перехватить location.reload() в jsdom нельзя — он непереназначаем,
+     поэтому сигналом служит попытка навигации) */
+  check('перезагрузка не вызвана без нужды', navAttempts === 0, 'навигаций: ' + navAttempts);
+  q('#updateReady').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await wait(120);
+  check('клик передаёт управление новому воркеру (postMessage skipWaiting)',
+    window.__sw.posts[0] === 'skipWaiting', JSON.stringify(window.__sw.posts));
+  check('клик прячет плашку сразу', q('#updateReady').hidden === true);
+  await wait(800);
+  check('страница перезагружается ровно один раз', navAttempts === 1, 'навигаций: ' + navAttempts);
+  window.__sw.swTarget.fire('controllerchange');
+  await wait(120);
+  check('controllerchange не зацикливает перезагрузку', navAttempts === 1, 'навигаций: ' + navAttempts);
+  window.__sw.posts.length = 0;
+}
+
 console.log('\n— console.error / window errors —');
 console.log(errors.length ? [...new Set(errors)].slice(0, 6).join('\n') : 'нет');
 console.log('\n— предупреждения (уникальные, первые 6) —');
 console.log([...new Set(warns)].slice(0, 6).join('\n') || 'нет');
+clearTimeout(watchdog);
 console.log('\nИТОГО провалов: ' + failed);
 dom.window.close();
 process.exit(failed ? 1 : 0);

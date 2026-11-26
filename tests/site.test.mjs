@@ -287,3 +287,95 @@ test('графики скрываются и показываются через
   const body = app.slice(app.indexOf('function setChartsVisible'));
   assert.match(body.slice(0, 1400), /resizeCharts\(\)/, 'при показе графиков не вызывается resize');
 });
+
+/* ---------- статус-окно: не мешает слоям и переставляется ---------- */
+test('статус-окно: ниже переключателя слоёв, не перекрывает его и двигается', () => {
+  const css = read('style.css');
+  const rule = css.match(/#statusBar\{([^}]*)\}/);
+  assert.ok(rule, 'нет правила #statusBar');
+  const decl = rule[1];
+
+  /* Leaflet кладёт свои контролы в .leaflet-top (z-index:1000), а #statusBar в DOM
+     идёт после #map: при z-index >= 1000 он лежал поверх раскрытого списка слоёв
+     и перехватывал клики по радиокнопкам. */
+  const z = /z-index:\s*(\d+)/.exec(decl);
+  assert.ok(z, 'у #statusBar нет z-index — порядок наложений непредсказуем');
+  assert.ok(+z[1] < 1000,
+    `z-index:${z[1]} не ниже .leaflet-top (1000) — статус снова перекроет выбор слоя`);
+  const top = /(?:^|[;{\s])top:\s*(\d+)px/.exec(decl);
+  assert.ok(top && +top[1] >= 120,
+    `top:${top ? top[1] : 'нет'}px — статус всё ещё там, куда разворачивается список слоёв`);
+  assert.match(decl, /touch-action:\s*none/, 'без touch-action палец поведёт страницу, а не окно');
+
+  /* двигается той же машинерией окон, но без закрепления размеров */
+  assert.match(app, /makeDraggable\('statusBar', null, \{ moveOnly:true \}\)/,
+    'статус-окно не подключено к перетаскиванию');
+  assert.match(app, /const WINDOWS = \[[^\]]*'statusBar'[^\]]*\]/,
+    'статус не в списке окон → его позиция не восстановится после перезагрузки');
+  const apply = app.slice(app.indexOf('function applyLayout'));
+  assert.match(apply.slice(0, 900), /if \(box\.moveOnly\)\{[\s\S]{0,240}?el\.style\.width = ''; el\.style\.height = '';/,
+    'moveOnly обязан пропускать ширину/высоту: текст статуса меняет длину');
+  assert.match(html, /<div id="statusBar"[^>]*class="drag-handle"/,
+    'у статуса нет .drag-handle — непонятно, что его можно тащить');
+});
+
+/* ---------- плашка «Доступна новая версия» ---------- */
+test('плашка обновления SW не показывается без необходимости', () => {
+  const script = html.slice(html.indexOf('<button id="updateReady"'), html.indexOf('</script>', html.indexOf('<button id="updateReady"')));
+  assert.ok(script.length > 200, 'не найден скрипт обновления рядом с #updateReady');
+  /* решение принимать по reg.waiting, а не по факту 'installed':
+     install в sw.js сам вызывает skipWaiting(), так что 'installed' наступает
+     раньше активации — на прошлой логике кнопка вылезала на каждой первой
+     загрузке после изменения sw.js, хотя перезагрузка была не нужна */
+  assert.match(script, /if \(reg && reg\.waiting\)/, 'нет проверки reg.waiting — кнопка будет всплывать зря');
+  assert.match(script, /setTimeout\(\(\) => \{ if \(reg && reg\.waiting\)[\s\S]{0,60}\}, 1500\)/,
+    'нет выдержки перед показом (нужно, чтобы skipWaiting успел отработать)');
+  /* прежний обработчик 'installed' + controller больше не является основанием */
+  assert.ok(!/if \(nw\.state === 'installed' && navigator\.serviceWorker\.controller\)/.test(script),
+    'старое условие по state+controller осталось — именно оно показывало кнопку просто так');
+  /* клик должен добить зависший waiting, иначе reload() оставил бы его висеть */
+  assert.match(script, /waiting\.postMessage\('skipWaiting'\)/, 'клик не передаёт управление новому воркеру');
+  assert.match(script, /reloaded = true/, 'нет защиты от повторной перезагрузки');
+  /* на sw.js-стороне обработчик сообщения обязан быть */
+  assert.match(sw, /if \(e\.data === 'skipWaiting'\) self\.skipWaiting\(\)/);
+  assert.match(sw, /\.then\(\(\) => self\.skipWaiting\(\)\)/, 'install не вызывает skipWaiting — обновлений не дождаться');
+  /* плашка на узком экране не должна ложиться на #modeTabs (bottom:96px) */
+  const css = read('style.css');
+  const narrow = css.slice(css.indexOf('@media(max-width:900px)'));
+  assert.match(narrow.slice(0, 1400), /#updateReady\{[^}]*bottom:auto[^}]*top:56px/,
+    'на узком экране плашка обновления перекрывает переключатель режимов');
+});
+
+/* ---------- расположение окна учебного сброса ---------- */
+test('поповер учебного сброса ставится ПОД маркером плотины', () => {
+  const i = app.indexOf('async function startRelease');
+  const block = app.slice(i, app.indexOf(".classList.add('show')", i));
+  assert.ok(i > 0 && block.length > 200, 'startRelease не найден');
+  assert.match(block, /className: 'breakPop pop-under'/,
+    'нет класса pop-under — хвост останется снизу, и окно будет смотреть «на маркер»');
+  assert.match(block, /offset: \[0, 12\]/, 'нужен стартовый зазор: высота меряется после вёрстки');
+  assert.match(block, /placePopupUnder\(pop\)/, 'смещение по высоте не применяется');
+  assert.match(block, /RELEASE\.popup = pop/, 'поповер не запоминается → его нечем закрывать');
+
+  /*helper*/
+  const helper = app.slice(app.indexOf('function placePopupUnder'), app.indexOf('async function startRelease'));
+  assert.ok(helper.length > 100, 'placePopupUnder не найден');
+  assert.match(helper, /getBoundingClientRect\(\)\.height\s*\|\|\s*el\.offsetHeight/,
+    'высота контейнера не измеряется — смещение выйдет произвольным');
+  assert.match(helper, /pop\.options\.offset = off;[\s\S]{0,40}pop\.update\(\)/,
+    'Leaflet пересчитывает позицию только в update()');
+  assert.ok(!/\.setOffset\(/.test(helper),
+    'setOffset() в Leaflet 1.9 не существует — будет TypeError прямо на сбросе');
+
+  /* окно обязано закрываться вместе со сценарием */
+  const stop = app.slice(app.indexOf('function stopRelease'), app.indexOf('function releaseDetailsHTML'));
+  assert.match(stop, /map\.closePopup\(RELEASE\.popup\)/,
+    'после выключения сценария окно сброса остаётся висеть на карте');
+
+  /* CSS-переворот хвоста */
+  const css = read('style.css');
+  assert.match(css, /\.leaflet-popup\.pop-under \.leaflet-popup-tip-container\{[^}]*top:-20px[^}]*bottom:auto/,
+    'полоска хвоста не перенесена на верхний край контейнера');
+  assert.match(css, /\.leaflet-popup\.pop-under \.leaflet-popup-tip\{[^}]*margin:10px auto 0/,
+    'ромбик хвоста не перевёрнут — хвост будет смотреть вниз');
+});

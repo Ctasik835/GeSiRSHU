@@ -594,7 +594,11 @@ const RELEASE = {
     [1000,60.686019,28.955504], [1500,60.689338,28.951666],
     [2000,60.692894,28.948601], [2500,60.696733,28.946009],
     [3000,60.699537,28.939458]
-  ]
+  ],
+  /* состояние активного сценария: маркеры участков и окно у плотины.
+     Держим здесь (а не в S), потому что чистит их stopRelease() */
+  reachMarkers: null,
+  popup: null
 };
 
 /* Алгоритм — model.js:releaseCalculate, копию с вырезанной валидацией
@@ -605,6 +609,25 @@ const RELEASE = {
 function fmtClock(sec){
   const hh = Math.floor(sec / 3600), mm = Math.floor(sec % 3600 / 60);
   return (hh ? hh + 'ч ' : '') + mm + 'м';
+}
+
+/* Leaflet привязывает поповер НИЖНИМ краем (в _updatePosition пишется
+   style.bottom = -(y + offset.y)), поэтому любое окно по умолчанию висит НАД
+   точкой. На Перовской при учебном сбросе именно там стоят маркер плотины и
+   подпись станций, и окно их накрывало. Решается сдвигом на собственную
+   высоту: offset.y = высота контейнера + зазор на «хвост», а сам хвост
+   переворачивает CSS-класс .pop-under (см. style.css).
+   setOffset() в Leaflet 1.9 нет — пишем опцию и зовём update(). */
+const POPUP_TIP_GAP = 7;      // дефолтный offset.y у L.popup
+function placePopupUnder(pop){
+  const el = pop.getElement && pop.getElement();
+  if (!el) return false;
+  const h = el.getBoundingClientRect().height || el.offsetHeight || 0;
+  const off = [0, h + POPUP_TIP_GAP];
+  if (String(pop.options.offset) === String(off)) return false;   // без дребезга на rAF
+  pop.options.offset = off;
+  pop.update();
+  return true;
 }
 
 async function startRelease(){
@@ -649,7 +672,8 @@ async function startRelease(){
 
   /* паспорт сценария у плотины — числа из расчёта, а не прописанные в разметке */
   setTimeout(() => {
-    L.popup({ maxWidth: 300, autoPan: false, closeButton: true, className: 'breakPop' })
+    const pop = L.popup({ maxWidth: 300, autoPan: false, closeButton: true,
+                          className: 'breakPop pop-under', offset: [0, 12] })
       .setLatLng([h.lat, h.lon])
       .setContent(`<b style="color:#31c9ff">📤 ДОПОЛНИТЕЛЬНЫЙ СБРОС — учебный сценарий</b><br>
         Объём источника: <b>${fmtNum(res.volume,0)} м³</b> (${fmtNum(p.cfg.area_m2,0)} м² × ${fmtNum(p.cfg.mean_drawdown_m,2)} м)<br>
@@ -657,8 +681,13 @@ async function startRelease(){
         Фоновый расход Q₀: <b>${fmtNum(res.bg,2)} м³/с</b> (медиана поста 72007, 2008–2012)<br>
         Трансформация: ${res.tau.length} участков по ~${fmtNum(avgReach(p),0)} м, каскад линейных резервуаров, c=${fmtNum(p.cfg.speed_parameter_ms,0)} м/с<br>
         <span style="color:#ffb02e;font-size:10px">Расходы рассчитаны каскадной линейной моделью (учебно).
-        Зона затопления не рассчитывалась.</span>`)
-      .openOn(map);
+        Зона затопления не рассчитывалась.</span>`);
+    RELEASE.popup = pop;
+    pop.openOn(map);
+    /* высота известна только после вёрстки контента: меряем сейчас и ещё раз
+       на следующем кадре (шрифты, переносы) — дальше окно не дёргается */
+    placePopupUnder(pop);
+    requestAnimationFrame(() => { if (RELEASE.popup === pop) placePopupUnder(pop); });
   }, 1000);
 
   $('alertBanner').classList.add('show');
@@ -735,6 +764,12 @@ function releaseStep(tNow){
 function stopRelease(){
   S.release = null;
   clear(layerFlood); clear(layerFloodZone);
+  /* поповер не слой в нашей группе — clear() его не снимает, иначе окно
+     «учебного сброса» висело на карте и после выключения сценария */
+  if (RELEASE.popup){
+    try { map.closePopup(RELEASE.popup); } catch(e){}
+    RELEASE.popup = null;
+  }
   $('alertBanner').classList.remove('show');
   if (RELEASE.reachMarkers) RELEASE.reachMarkers = null;
   /* панель деталей после сценария оставалась «сбросовой» — возвращаем паспорт */
@@ -2520,6 +2555,8 @@ function setChartsVisible(on, opts){
 }
 
 const LAYOUT_KEY = 'ges_layout_v1';
+/* окна, помнящие своё место; statusBar — только позицию (см. moveOnly) */
+const WINDOWS = ['sidebar', 'chartPanel', 'statusBar'];
 const NARROW = () => window.matchMedia && window.matchMedia('(max-width:900px)').matches;
 
 function saveLayout(id, box){
@@ -2541,6 +2578,17 @@ function clearLayout(id){
 }
 function clampBox(el, box){
   const W = window.innerWidth, H = window.innerHeight;
+  /* moveOnly — элементы с размером «по содержимому» (статус): их нельзя ни
+     растягивать по сохранённой ширине, ни обрезать половиной за краем */
+  if (box.moveOnly){
+    const w = Math.min(box.w || el.offsetWidth, W - 16);
+    const h = Math.min(box.h || el.offsetHeight, H - 16);
+    return Object.assign({}, box, {
+      w, h,
+      left: Math.max(8, Math.min(box.left, W - w - 8)),
+      top:  Math.max(8, Math.min(box.top,  H - h - 8))
+    });
+  }
   const w = Math.min(Math.max(box.w || el.offsetWidth, 220), W - 16);
   const h = Math.min(Math.max(box.h || el.offsetHeight, 140), H - 16);
   return {
@@ -2554,6 +2602,12 @@ function applyLayout(id, el, box){
   el.style.right = 'auto'; el.style.bottom = 'auto';
   el.style.left = Math.round(box.left) + 'px';
   el.style.top  = Math.round(box.top) + 'px';
+  if (box.moveOnly){
+    /* только координаты: ширина/высота остаются вычисленными браузером, иначе
+      .statusText в статус-окне обрезался бы до записанных когда-то пикселей */
+    el.style.width = ''; el.style.height = '';
+    return;
+  }
   el.style.width = Math.round(box.w) + 'px';
   el.style.height = Math.round(box.h) + 'px';
   /* таймлайн подстроен под ширину сайдбара через CSS-переменную */
@@ -2562,7 +2616,8 @@ function applyLayout(id, el, box){
 
 const isButton = el => !!(el && el.closest && el.closest('button'));
 
-function makeDraggable(id, handleSelector){
+function makeDraggable(id, handleSelector, opts){
+  const o = opts || {};
   const el = $(id);
   if (!el) return;
   const handle = handleSelector ? el.querySelector(handleSelector) : el;
@@ -2585,15 +2640,18 @@ function makeDraggable(id, handleSelector){
       el.style.right = 'auto'; el.style.bottom = 'auto';
       el.style.left = left + 'px';
       el.style.top = top + 'px';
-      el.style.width = r.width + 'px';
-      el.style.height = r.height + 'px';
+      if (!o.moveOnly){
+        el.style.width = r.width + 'px';
+        el.style.height = r.height + 'px';
+      }
     };
     const up = () => {
       el.classList.remove('dragging');
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', up);
       const box = el.getBoundingClientRect();
-      const c = clampBox(el, { left: box.left, top: box.top, w: box.width, h: box.height });
+      const c = clampBox(el, { left: box.left, top: box.top, w: box.width, h: box.height,
+                                moveOnly: !!o.moveOnly });
       applyLayout(id, el, c);
       saveLayout(id, c);
     };
@@ -2656,7 +2714,7 @@ function makeResizable(id, minW = 220, minH = 150){
 
 function restoreWindows(){
   const saved = readLayout();
-  ['sidebar','chartPanel'].forEach(id => {
+  WINDOWS.forEach(id => {
     const el = $(id);
     if (!el) return;
     el.querySelectorAll('.resizer').forEach(r => r.remove());
@@ -2676,6 +2734,8 @@ function makeWindowsDraggable(){
   makeResizable('sidebar', 240, 240);
   makeDraggable('chartPanel', '.drag-handle');
   makeResizable('chartPanel', 280, 180);
+  /* статус-окно: двигаем, но не ресайзим (moveOnly) — размер у него по тексту */
+  makeDraggable('statusBar', null, { moveOnly:true });
   /* смена размера окна / поворот телефона — пересобрать раскладку */
   let t = 0;
   window.addEventListener('resize', () => {
