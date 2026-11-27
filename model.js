@@ -328,6 +328,317 @@
     return out;
   }
 
+  /* ============================================================
+     ЗЕРКАЛО ВОДОХРАНИЛИЩА В СЦЕНАРИЯХ «ПАВОДОК»/«ЗАСУХА»
+     ============================================================ */
+  /* Почему это отдельная схема. simulate() сознательно держит уровень на
+     целевой отметке — это правило эксплуатации ГЭС, оно нужно для ряда
+     мощности. Из-за него отметка и площадь зеркала на сценарий НЕ реагируют
+     вовсе: при ×3 приток уходит в холостой сброс, при ×0,15 приток и так
+     меньше пропускной способности. На карте это выглядит как «водохранилище
+     не меняется», поэтому здесь — явная схема свободным водосбросом:
+
+        Δh = GAIN · ln k ,          k — водность ГОДА (см. ниже)
+        A/A_НПУ = 1 + Δh / d̄ ,       d̄ = V_полный / A_НПУ — средняя глубина чаши
+        w = A/A_НПУ                  поперечный множитель полосы воды (см. ниже)
+
+     Множитель k для зеркала НЕ совпадает с помесечным множителем расхода:
+     scenarioFactor рисует колокол паводка (пик ~30-е чис апреля) и спад к
+     осени. Пруд на такой колокол отреагировал бы только в мае: в остальное
+     время k ≈ 1 и берег стоял бы на месте — ровно то, на что указывал
+     вопрос «почему водохранилище не меняется». Уровень же держит годовую
+     водность: многоводный год поднимает пруд к гребню и он стоит высоким до
+     межени, маловодный — опускает к УМО. Поэтому берём годовой множитель
+     (для паводка — вершина колокола, для засухи — её нижняя граница) и
+     подмешиваем к нему текущий день, чтобы зеркало всё же «дышало» при
+     перемотке по году:
+        ln k = 0,7 · ln k_год + 0,3 · ln k_день
+
+     GAIN = 0,5·(НПУ−УМО)/3, то есть на «e-кратное» изменение притока отметка
+     сдвигается на треть половины полезного диапазона. Все числа — из паспорта
+     станции, скрытых коэффициентов нет. Ограничители держат схему в коридоре
+     УМО..НПУ и не дают берегу исчезнуть/разбухнуть за пределы, которых в данных
+     нет (SHORE_CLAMP.width — он же «на сколько раз шире/уже полоса воды»).
+     Это СХЕМА, не инженерный расчёт подпорных кривых. */
+  const SHORE_CLAMP = { dh: [0.8, 0.35], area: [0.25, 2.2], width: [0.3, 1.5] };
+
+  /* Доля годового множителя в поправке зеркала и сам годовой множитель. */
+  const WATER_YEAR_WEIGHT = 0.7;
+
+  function scenarioAnnualFactor(h, scen){
+    if (scen === 'flood') return 1 + (Number.isFinite(h && h.floodAmp) ? h.floodAmp : 3.0);
+    if (scen === 'drought'){
+      const floor = Number.isFinite(h && h.droughtMin) ? h.droughtMin : 0.15;
+      return Math.max(0.05, floor);
+    }
+    return 1;
+  }
+
+  /* w — поперечный множитель полосы воды. Для сжатия ПОПЕРЁК русла площадь
+     меняется ровно во столько же раз, поэтому width = A/A_НПУ (с своим
+     ограничителем — иначе берег на 1,55·ширины уползал бы за снимок). */
+  function reservoirScenario(h, factor){
+    const none = { dh: 0, areaRatio: 1, width: 1, depth: 0 };
+    const k = Number(factor);
+    if (!h || !(k > 0) || !isFinite(k)) return none;
+    const band = Math.max(0.5, (Number(h.nmu) - Number(h.umo)) || 1);
+    let dh = (0.5 * band / 3) * Math.log(k);
+    dh = Math.max(-SHORE_CLAMP.dh[0] * band, Math.min(SHORE_CLAMP.dh[1] * band, dh));
+    const A0 = (Number(h.areaNMU) || 0) * 1e6;
+    const V = (Number(h.totalVolume) || 0) * 1e9;
+    const depth = A0 > 0 && V > 0 ? Math.max(0.5, V / A0) : 2;
+    const areaRatio = Math.min(SHORE_CLAMP.area[1], Math.max(SHORE_CLAMP.area[0], 1 + dh / depth));
+    const width = Math.min(SHORE_CLAMP.width[1], Math.max(SHORE_CLAMP.width[0], areaRatio));
+    return { dh, areaRatio, width, depth };
+  }
+
+  /* ============================================================
+     БЕРЕГ: ПОЛОСА ВОДЫ СЖИМАЕТСЯ И РАЗДУВАЕТСЯ ПОПЕРЁК РУСЛА
+     ============================================================ */
+  /* Чего здесь сознательно нет, и почему.
+     · Масштабирование кольца вокруг точки (центра bbox или вершины у
+       плотины) — first attempt: на серповидном заливе оно съезжает. Вокруг
+       центра вода отрывалась от створа на ~60 м, вокруг створа — хвост
+       уезжал вверх по руслу, а берег на вогнутой стороне вылезал за чашу.
+     · «Притянуть наружные вершины к ближайшему берегу» — second attempt:
+       ближайшая точка границы оказывается на РУКОВЕ или на том же берегу
+       напротив, и вместо зеркала получаются шипы и отрывы (скриншот
+       «водохранилище делает вот так»).
+     Оба варианта ломает одно и то же: у нас ОДИН контур (снимок при НПВ),
+     а level-→-shoreline это задача про ШИРИНУ долины, а не про подобие
+     фигуры. Поэтому деформация берётся локальной: каждая вершина едет
+     вдоль внутренней нормали к середине своего створа. Свойства, которые
+     нужны были глазами:
+       · w<1 → каждая точка уходит НЕ ДАЛЬШЕ середины створа, т.е. гарантированно
+         остаётся внутри прежнего зеркала — «вода не может
+         стоять там, где её не было при НПВ»;
+       · движение строго поперёк русла — плотина, устье и концы рукавов
+         стоят: луч по ним длиннее 2·средней ширины, такие вершины не трогаем
+         (именно поэтому берег больше не «съезжает»);
+       · фигура остаётся простой — соседние вершины едут по своим нормалям на
+         величину своего створа, петли не возникают (проверяется тестом).
+     Всё в локальной метровой проекции (x = lon·cos(sh)·111320, y = lat·111320):
+     на коридоре ~2 км погрешность доли процента, а без cos(широты) долгота на
+     60°параллели врала бы почти вдвое. */
+
+  const M_PER_DEG = 111320;
+  const AXIAL_RAY = 2;      /* во сколько раз средняя ширина — «луч вдоль русла» */
+
+  /* Список колец: принимает и одно кольцо, и список колец. */
+  function ringList(rings){
+    if (!Array.isArray(rings) || !rings.length) return [];
+    return Array.isArray(rings[0][0]) ? rings : [rings];
+  }
+  function cleanRing(ring){
+    return (ring || []).filter(p => p && isFinite(p[0]) && isFinite(p[1]));
+  }
+  /* Проекционный кадр по всем кольцам водоёма — метры, общая для всех частей. */
+  function planarFrame(rings){
+    const pts = [];
+    for (const r of ringList(rings)) pts.push.apply(pts, cleanRing(r));
+    let sum = 0;
+    for (const p of pts) sum += p[0];
+    const lat0 = pts.length ? sum / pts.length : 0;
+    const k = Math.cos(lat0 * Math.PI / 180) || 1;
+    return {
+      k,
+      to: p => [p[1] * k * M_PER_DEG, p[0] * M_PER_DEG],
+      from: xy => [xy[1] / M_PER_DEG, xy[0] / (k * M_PER_DEG)]
+    };
+  }
+  /* Точка внутри кольца — «нечётное пересечение». Аффинно инвариантно,
+     поэтому можно гонять и в градусах, и в метрах. */
+  function pointInRing(ring, p){
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      const yi = ring[i][1], yj = ring[j][1], xi = ring[i][0], xj = ring[j][0];
+      if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function shoelaceXY(ring){
+    let a = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      a += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+    }
+    return Math.abs(a) / 2;
+  }
+  /* 2·площадь/периметр — средняя ширина полосы (для русла = ширина реки). */
+  function ringWidth(ring){
+    const A = shoelaceXY(ring);
+    let P = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      P += Math.hypot(ring[i][0] - ring[j][0], ring[i][1] - ring[j][1]);
+    }
+    return P > 0 ? 2 * A / P : 0;
+  }
+  /* Расстояние от точки до первого пересечения с кольцом по лучу p + s·dir. */
+  function rayExit(ring, p, dir, maxS){
+    let best = Infinity;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++){
+      const ax = ring[j][0], ay = ring[j][1];
+      const ex = ring[i][0] - ax, ey = ring[i][1] - ay;
+      const px = p[0] - ax, py = p[1] - ay;
+      const det = dir[0] * ey - dir[1] * ex;
+      if (Math.abs(det) < 1e-12) continue;      // луч параллельно ребру
+      const s = (ex * py - ey * px) / det;       // наш параметр
+      const u = (dir[0] * py - dir[1] * px) / det;   // параметр на ребре
+      if (s > 1e-6 && s < best && u >= -1e-9 && u <= 1 + 1e-9) best = s;
+    }
+    return best > 0 && best <= maxS ? best : Infinity;
+  }
+
+  /* Локальный створ вершины: внутренняя нормаль и расстояние до
+     противоположного берега. Кольцо объезжается по соседу «через одного» —
+     так нормаль не ломается на острых углах упрощённого OSM-контура. */
+  function shoreRays(ring){
+    const n = ring.length;
+    const ref = Math.max(0.5, ringWidth(ring));
+    const probe = Math.max(0.5, ref * 0.02);
+    return ring.map((p, i) => {
+      const prev = ring[(i - 1 + n) % n], next = ring[(i + 1) % n];
+      let tx = next[0] - prev[0], ty = next[1] - prev[1];
+      const tl = Math.hypot(tx, ty);
+      if (!(tl > 0) || !p || !isFinite(p[0]) || !isFinite(p[1])) return null;
+      tx /= tl; ty /= tl;
+      let dir = null, dist = Infinity;
+      for (const c of [[-ty, tx], [ty, -tx]]){
+        if (!pointInRing(ring, [p[0] + c[0] * probe, p[1] + c[1] * probe])) continue;
+        const t = rayExit(ring, p, c, 6 * ref);
+        if (t < dist){ dist = t; dir = c; }
+      }
+      return dir && isFinite(dist) ? { dir, dist } : null;
+    });
+  }
+  function medianOf(vals){
+    const v = vals.filter(x => isFinite(x) && x > 0).sort((a, b) => a - b);
+    return v.length ? v[v.length >> 1] : 0;
+  }
+
+  /* Полоса воды: w<1 — сжать к середине створов, w>1 — раздуть на берега.
+     Смещение каждой вершины = (1−w)·(половина её створа) вдоль внутренней
+     нормали, с тремя страховками — без них на упрощённом OSM-контуре
+     вырастали петли и «шипы» (это и было «водохранилище делает вот так»):
+       · дальше CAP никто не едет: луч длиннее CAP — это плотина, устье и
+         концы рукавов, они стоят (именно поэтому берег не съезжает);
+       · между CAP и 2·CAP величина плавно сходится к нулю — иначе на остром
+         угле соседние вершины разъезжаются вразнобой;
+       · смещение ограничено EDGE·длиной ближайшего ребра: вершина не имеет
+         права проехать мимо соседа — это и есть условие «кольцо остаётся
+         простым, без самопересечений». */
+  const SHORE_CAP = 1.5;      /* × медианной ширины створа */
+  const SHORE_EDGE = 0.35;    /* × длины ближайшего ребра */
+
+  function narrowRing(ring, w){
+    const n = ring.length;
+    if (n < 6 || !(w > 0) || !isFinite(w) || Math.abs(w - 1) < 1e-4) return ring;
+    const rays = shoreRays(ring);
+    const cap = SHORE_CAP * medianOf(rays.map(x => x && x.dist));
+    if (!(cap > 0)) return ring;
+    const sign = w < 1 ? 1 : -1;
+    return ring.map((p, i) => {
+      const x = rays[i];
+      if (!x) return p;
+      let d = x.dist;
+      if (d > cap) d = d >= 2 * cap ? 0 : d * (2 * cap - d) / cap;
+      let mag = Math.abs(1 - w) * d / 2;
+      if (!(mag > 1e-6)) return p;
+      const prev = ring[(i - 1 + n) % n], next = ring[(i + 1) % n];
+      const edge = Math.min(Math.hypot(p[0] - prev[0], p[1] - prev[1]),
+                            Math.hypot(p[0] - next[0], p[1] - next[1]));
+      if (mag > SHORE_EDGE * edge) mag = SHORE_EDGE * edge;
+      return [p[0] + x.dir[0] * mag * sign, p[1] + x.dir[1] * mag * sign];
+    });
+  }
+
+  /* Береговая линия сценария: кольца для L.polygon + фактическая доля
+     площади. Карточка подписывает ровно то, что нарисовано: после локальной
+     деформации площадь не равна «w на бумаге» (концы русла стоят). */
+  function shorelineRings(rings, w){
+    const list = ringList(rings);
+    if (!list.length) return { rings: [], areaRatio: 1 };
+    /* нет смысла гонять градусы через метры, если берег не двигается:
+       на возврате исходных колец deepEqual в тестах — не случайность */
+    const wf = Number(w);
+    if (!(wf > 0) || !isFinite(wf) || Math.abs(wf - 1) < 1e-4) return { rings: list, areaRatio: 1 };
+    const fr = planarFrame(list);
+    let a0 = 0, a1 = 0;
+    const out = list.map(ring => {
+      const clean = cleanRing(ring).map(fr.to);
+      a0 += shoelaceXY(clean);
+      if (!clean.length) return ring;
+      const moved = narrowRing(clean, Number(w)).map(fr.from);
+      a1 += shoelaceXY(moved.map(fr.to));
+      return moved;
+    });
+    return { rings: out, areaRatio: a0 > 0 ? a1 / a0 : 1 };
+  }
+
+  /* БЕРЕГ по ФАКТИЧЕСКОЙ отметке ряда — «норма» и режим климата.
+     Чем ниже вода в долине, тем уже полоса: 1 + (уровень − НПУ)/(НПУ − УМО), т.е.
+     на УМО чаша пуста, и рисовать тогда весь контур снимка при НПВ — врать
+     про размер (претензия: в климате зеркало меняло только цвет). Ограничитель
+     SHORE_CLAMP.width[0] оставляет на дне протоку — иначе на месяцах ниже
+     НПУ−1·диапазон контур исчезал совсем. Схема «паводок»/«засуха» НЕ заменяет
+     эту базу, а домножает её: маловодный год маловоден и на полном пруду, и на
+     половинке (см. applyReservoirScenario). */
+  function shoreWidthFromLevel(h, level){
+    const nmu = Number(h && h.nmu), umo = Number(h && h.umo);
+    const lvl = typeof level === 'number' ? level : Number(level);
+    if (!isFinite(nmu) || !isFinite(umo) || !isFinite(lvl) || level === null || level === undefined){
+      return { dh: 0, base: 1 };
+    }
+    const band = Math.max(0.5, nmu - umo);
+    const dh = lvl - nmu;
+    return { dh, base: Math.min(1, Math.max(SHORE_CLAMP.width[0], 1 + dh / band)) };
+  }
+
+  /* Ряды зеркала по всему ряду дат. Возвращается КОПИЯ: исходный расчёт
+     simulate() остаётся нетронутым (на нём держатся мощность и «прорыв»).
+     Напор и мощность поправкой не трогаются — для пруда в 0,15 МВт это доли
+     киловатт, а расхождение «отметка ↔ выработка» честнее сказать словами,
+     чем нарисовать. */
+  function applyReservoirScenario(res, h, times, scen){
+    if (!res || !Array.isArray(res.level) || !res.level.length) return res;
+    const scheme = (scen === 'flood' || scen === 'drought');
+    /* «прорыв» и «сброс» живут своими сценариями и зеркало не трогают */
+    if (!scheme && scen !== 'normal') return res;
+    const out = Object.assign({}, res, {
+      level: res.level.slice(), area: res.area.slice(),
+      shoreWidth: [], shoreDh: [], shoreScheme: [], scenarioWater: scen
+    });
+    for (let i = 0; i < out.level.length; i++){
+      if (!scheme){
+        /* «норма»: отметки и площади — как их посчитал simulate (в т.ч. месячный
+           ряд в режиме климата), берег = сколько воды стоит в чаше прямо сейчас */
+        const sl = shoreWidthFromLevel(h, out.level[i]);
+        out.shoreDh.push(sl.dh); out.shoreWidth.push(sl.base); out.shoreScheme.push(1);
+        continue;
+      }
+      const kDay = scenarioFactor(h, times && times[i], scen);
+      const kYear = scenarioAnnualFactor(h, scen);
+      const kk = kDay > 0 && kYear > 0
+        ? Math.exp(WATER_YEAR_WEIGHT * Math.log(kYear) + (1 - WATER_YEAR_WEIGHT) * Math.log(kDay))
+        : kYear;
+      const w = reservoirScenario(h, kk);
+      const lvl = out.level[i];
+      const base = shoreWidthFromLevel(h, lvl).base;
+      out.shoreDh.push(w.dh);
+      out.shoreScheme.push(w.width);
+      /* база по отметке × множитель схемы: сначала «сколько воды в чаше», сверху
+         «многоводный/маловодный год». 0,2 снизу — чтобы засуха на уже сжатом
+         зеркале оставалась видимой (иначе обе полки упёрлись бы в один пол) */
+      out.shoreWidth.push(isFinite(lvl)
+        ? Math.min(SHORE_CLAMP.width[1], Math.max(0.2, base * w.width)) : 1);
+      if (!isFinite(lvl)) continue;
+      out.level[i] = Math.min(Number(h.nmu), Math.max(Number(h.umo), lvl + w.dh));
+      /* площадь зеркала — по ФАКТИЧЕСКОЙ деформации берега (shorelineRings),
+         но она требует геометрии, а здесь её нет: берём areaRatio схемы */
+      if (isFinite(out.area[i])) out.area[i] = Math.max(0, out.area[i] * w.areaRatio);
+    }
+    return out;
+  }
+
   const GES = {
     DAY_MS, ISO_RE,
     isoToUTC, utcToISO, todayISO, dayRange, dayOfYear, yearOf, daysInMonth,
@@ -335,6 +646,9 @@
     num, fmtMW, fmtAxisPower, fmtEnergyKWh, fmtDateRu,
     scenarioFactor, syntheticData, HISTORY_START_DEFAULT,
     simulate, damBreakView, movingAverage,
+    reservoirScenario, applyReservoirScenario, SHORE_CLAMP, shoreWidthFromLevel,
+    scenarioAnnualFactor, WATER_YEAR_WEIGHT,
+    shorelineRings, narrowRing, pointInRing, shoelaceXY, planarFrame, ringWidth, rayExit,
     validateRelease, releaseCalculate
   };
 

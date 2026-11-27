@@ -192,3 +192,343 @@ test('movingAverage: окно, границы и пустой вход', () => {
   assert.deepEqual(GES.movingAverage([1, 2, 3], 1), [1, 2, 3]);
   assert.deepEqual(GES.movingAverage(undefined, 5), []);
 });
+
+/* ---------- зеркало водохранилища в сценариях «паводок»/«засуха» ---------- */
+test('reservoirScenario: паводок поднимает зеркало, засуха опускает', () => {
+  const h = { nmu: 17.5, umo: 12, areaNMU: 0.03, totalVolume: 0.00008 };
+  const wet = GES.reservoirScenario(h, 3), dry = GES.reservoirScenario(h, 0.15);
+  assert.ok(wet.dh > 0 && wet.areaRatio > 1 && wet.width > 1, 'паводок: всё растёт');
+  assert.ok(dry.dh < 0 && dry.areaRatio < 1 && dry.width < 1, 'засуха: всё падает');
+  assert.ok(Math.abs(dry.dh) > Math.abs(wet.dh), 'ln-зависимость: просадка ×0,15 круще, чем ×3');
+  /* поперёк русла сжимаем не сильнее, чем это выглядит правдоподобно */
+  assert.ok(dry.width >= GES.SHORE_CLAMP.width[0] && wet.width <= GES.SHORE_CLAMP.width[1], 'width в климпе');
+  const one = GES.reservoirScenario(h, 1);
+  assert.equal(one.dh, 0); assert.equal(one.width, 1); assert.equal(one.areaRatio, 1);
+  /* средняя глубина чаши берётся из паспорта: V/A */
+  assert.ok(Math.abs(wet.depth - (0.00008 * 1e9) / (0.03 * 1e6)) < 1e-9, 'd̄ = V/A_НПУ');
+});
+
+test('reservoirScenario: мусор и неполный паспорт не дают NaN и не вылезают за климпы', () => {
+  const h = { nmu: 17.5, umo: 12, areaNMU: 0.03, totalVolume: 0.00008 };
+  for (const bad of [0, -1, NaN, Infinity, -Infinity, null, undefined, 'x']){
+    assert.deepEqual(GES.reservoirScenario(h, bad), { dh: 0, areaRatio: 1, width: 1, depth: 0 },
+      'на некорректный множитель — нейтральный ответ, а не NaN');
+  }
+  for (const k of [1e-6, 1e6]){
+    const w = GES.reservoirScenario(h, k);
+    assert.ok(Number.isFinite(w.dh) && Number.isFinite(w.width) && Number.isFinite(w.areaRatio), 'k=' + k);
+    assert.ok(w.width >= GES.SHORE_CLAMP.width[0] && w.width <= GES.SHORE_CLAMP.width[1], 'width в климпе');
+    assert.ok(w.areaRatio >= GES.SHORE_CLAMP.area[0] && w.areaRatio <= GES.SHORE_CLAMP.area[1], 'area в климпе');
+    assert.ok(Math.abs(w.dh) <= 0.8 * (h.nmu - h.umo), 'dh в коридоре берегов');
+  }
+  const noGeom = GES.reservoirScenario({ nmu: 10, umo: 9 }, 2);   // ни площади, ни объёма
+  assert.ok(Number.isFinite(noGeom.dh) && noGeom.width > 1 && noGeom.width <= GES.SHORE_CLAMP.width[1],
+    'паспорт без водности — схема всё равно конечна');
+});
+
+test('applyReservoirScenario: копия рядов, уровень в коридоре УМО..НПУ, исходник цел', () => {
+  const data = GES.syntheticData(HPP, 'history', { now: Date.UTC(2025, 5, 1) });
+  const base = GES.simulate(HPP, data.hydro, data.clim);
+  /* «норма» тоже получает копию: в ней ряды отметок/площади идут КАК есть,
+     но добавляется берег (shoreWidth/shoreDh) — иначе в режиме климата зеркало
+     меняло бы цвет, а не размер */
+  const norm = GES.applyReservoirScenario(base, HPP, data.hydro.time, 'normal');
+  assert.notEqual(norm, base, 'ожидалась копия');
+  assert.deepEqual(norm.level, base.level, 'в «норме» ряд отметок правиться не должен');
+  assert.deepEqual(norm.area, base.area, 'в «норме» ряд площади правиться не должен');
+  assert.equal(norm.shoreWidth.length, base.level.length);
+  /* берег = снимок при НПВ ровно тогда, когда отметка у НПУ; ниже — сжат */
+  for (let i = 0; i < base.level.length; i++){
+    const lvl = base.level[i], wd = norm.shoreWidth[i];
+    assert.ok(isFinite(wd) && wd >= 0.3 - 1e-9 && wd <= 1.5 + 1e-9, 'берег вне коридора: ' + wd);
+    if (!isFinite(lvl)){ assert.equal(wd, 1, 'на провале ряда отметок поправки быть не должно'); continue; }
+    if (lvl > HPP.nmu - 0.02) assert.ok(wd > 0.98, 'на НПУ берег обязан быть снимком, wd=' + wd);
+    else if (lvl < HPP.nmu - 1) assert.ok(wd < 0.95, 'при ' + lvl.toFixed(2) + ' м берег не сжался: ' + wd);
+  }
+
+  for (const sc of ['flood', 'drought']){
+    const q = data.hydro.q.map((v, k) => v * GES.scenarioFactor(HPP, data.hydro.time[k], sc));
+    const plain = GES.simulate(HPP, { time: data.hydro.time, q }, data.clim);
+    const lvlBefore = plain.level.slice();
+    const adj = GES.applyReservoirScenario(plain, HPP, data.hydro.time, sc);
+    assert.notEqual(adj, plain, 'должна вернуться копия');
+    assert.deepEqual(plain.level, lvlBefore, 'исходный ряд правиться не должен');
+    assert.equal(adj.level.length, plain.level.length);
+    assert.equal(adj.shoreWidth.length, plain.level.length);
+    assert.equal(adj.shoreDh.length, plain.level.length);
+    assert.equal(adj.scenarioWater, sc);
+    let moved = 0;
+    for (let i = 0; i < adj.level.length; i++){
+      assert.ok(Number.isFinite(adj.level[i]) && Number.isFinite(adj.area[i]), `${sc}[${i}]: NaN`);
+      assert.ok(adj.level[i] >= HPP.umo - 1e-9 && adj.level[i] <= HPP.nmu + 1e-9,
+        `${sc}[${i}]: уровень ${adj.level[i]} вне коридора ${HPP.umo}..${HPP.nmu}`);
+      assert.ok(adj.area[i] >= 0, 'площадь не может быть отрицательной');
+      assert.ok(Number.isFinite(adj.shoreWidth[i]) && adj.shoreWidth[i] > 0, 'берег: конечный множитель');
+      /* зеркало (площадь/ширина полосы) двигается на ВСЕХ датах, а отметка —
+         только там, где пруд не уперся в гребень: полный водосброс не «перельётся»
+         вверх по уровню, зато разольётся по берегам — это физика, а не пропуск */
+      const wetter = sc === 'flood';
+      assert.ok(wetter ? adj.area[i] >= plain.area[i] - 1e-12 : adj.area[i] <= plain.area[i] + 1e-12,
+        `${sc}[${i}]: площадь зеркала должна ${wetter ? 'расти' : 'уменьшаться'}`);
+      /* множитель берега теперь = A/A_НПУ собственного ряда (чтобы цифра в
+         карточке и нарисованный контур были одним числом), поэтому при низкой
+         отметке и в «паводок» он меньше 1. Направление сдвига смотрим ОТНОСИТЕЛЬНО
+         «нормы» того же ряда — именно это глазу видно на карте */
+      const nrm = GES.applyReservoirScenario(plain, HPP, data.hydro.time, 'normal');
+      const floor = GES.SHORE_CLAMP.width[0], ceil = GES.SHORE_CLAMP.width[1];
+      const pinned = adj.shoreWidth[i] <= floor + 1e-9 || adj.shoreWidth[i] >= ceil - 1e-9;
+      assert.ok(pinned || (wetter ? adj.shoreWidth[i] > nrm.shoreWidth[i] + 1e-9
+                                  : adj.shoreWidth[i] < nrm.shoreWidth[i] - 1e-9),
+        `${sc}[${i}]: берег ${adj.shoreWidth[i].toFixed(3)} должен ${wetter ? 'расширять' : 'сжимать'} зеркало против нормы ${nrm.shoreWidth[i].toFixed(3)}`);
+      /* берег = (база по фактической отметке) × (множитель года): обе части видно
+         отдельно — shoreScheme это «многоводный/маловодный год», shoreWidth —
+         что реально рисуем. Именно поэтому засуха видна и на полном пруду,
+         и на уже сжатом зимой */
+      const want = Math.min(ceil, Math.max(0.2, nrm.shoreWidth[i] * adj.shoreScheme[i]));
+      assert.ok(Math.abs(adj.shoreWidth[i] - want) < 1e-12,
+        `${sc}[${i}]: берег ${adj.shoreWidth[i].toFixed(4)} ≠ база ${nrm.shoreWidth[i].toFixed(4)} × схема ` +
+        adj.shoreScheme[i].toFixed(4) + ' = ' + want.toFixed(4));
+      assert.ok(adj.shoreWidth[i] <= ceil + 1e-9 && adj.shoreWidth[i] >= 0.2 - 1e-9,
+        `${sc}[${i}]: берег ${adj.shoreWidth[i]} вышел за коридор чаши`);
+      if (Math.abs(adj.level[i] - plain.level[i]) > 1e-6) moved++;
+    }
+    assert.ok(moved > 0, `${sc}: хотя бы на части дат отметка сдвигается (сдвинулась на ${moved})`);
+    assert.deepEqual(adj.power, plain.power, 'мощность в этой схеме не пересчитывается');
+  }
+});
+
+test('applyReservoirScenario: зеркало двигается в ЛЮБОМ месяце, а не только в паводок', () => {
+  /* Регрессия на «водохранилище не меняется при засухе/паводке»: пока k брался
+     из помесячного scenarioFactor (колокол с пиком в апреле), в июле и ноябре
+     k ≈ 1 и берег стоял на месте. now подбираем так, чтобы последний день ряда
+     был в начале лета, в конце осени и в начале зимы. */
+  for (const now of [Date.UTC(2025, 6, 5), Date.UTC(2025, 10, 20), Date.UTC(2025, 1, 10)]){
+    const data = GES.syntheticData(HPP, 'history', { now });
+    const base = GES.simulate(HPP, data.hydro, data.clim);
+    const last = base.level.length - 1;
+    for (const sc of ['flood', 'drought']){
+      const adj = GES.applyReservoirScenario(base, HPP, data.hydro.time, sc);
+      const d = new Date(data.hydro.time[last]).toISOString().slice(0, 10);
+      assert.ok(Math.abs(adj.shoreDh[last]) > 0.3,
+        `${d} / ${sc}: сдвиг отметки ${adj.shoreDh[last].toFixed(3)} м — меньше 0,3 м глаз не видит`);
+      const nrm = GES.applyReservoirScenario(base, HPP, data.hydro.time, 'normal');
+      const rel = adj.shoreWidth[last] / (nrm.shoreWidth[last] || 1);
+      assert.ok(sc === 'flood' ? rel > 1.08 : rel < 0.92,
+        `${d} / ${sc}: зеркало ×${adj.shoreWidth[last].toFixed(3)} против нормы ` +
+        `${nrm.shoreWidth[last].toFixed(3)} (×${rel.toFixed(3)}) — изменения не видно`);
+    }
+  }
+  /* годовой множитель — вершина колокола (паводок) и её нижняя граница (засуха) */
+  assert.equal(GES.scenarioAnnualFactor({ }, 'flood'), 4);
+  assert.equal(GES.scenarioAnnualFactor({ }, 'drought'), 0.15);
+  assert.equal(GES.scenarioAnnualFactor({ }, 'normal'), 1);
+  assert.ok(GES.WATER_YEAR_WEIGHT > 0.5 && GES.WATER_YEAR_WEIGHT < 1, 'годовое должно dominates помесячное');
+});
+
+/* ---------- геометрия берега ---------- */
+test('pointInRing / rayExit / ringWidth: примитивы на прямой геометрии', () => {
+  const square = [[0, 0], [0, 10], [10, 10], [10, 0]];
+  assert.ok(GES.pointInRing(square, [5, 5]), 'центр внутри');
+  assert.ok(!GES.pointInRing(square, [11, 5]), 'точка снаружи — снаружи и считается');
+  assert.ok(!GES.pointInRing(square, [5, 11]), 'и по «вертикали» тоже');
+  /* луч из точки у берега внутрь = расстояние до противоположной стены */
+  assert.ok(Math.abs(GES.rayExit(square, [0.5, 5], [1, 0], 100) - 9.5) < 1e-9, 'внутрь — до x=10');
+  assert.ok(Math.abs(GES.rayExit(square, [0.5, 5], [-1, 0], 100) - 0.5) < 1e-9,
+    'наружу — то же пересечение, но с ближайшим берегом');
+  assert.equal(GES.rayExit(square, [5, -5], [1, 0], 100), Infinity, 'луч вдоль берега снаружи не пересекает ничего');
+  assert.equal(GES.rayExit(square, [0.5, 5], [1, 0], 3), Infinity, 'дальше maxS не ищем');
+  /* 2·S/P — средняя ширина ПОЛОСЫ: для длинного канала она равна ширине,
+     для квадрата 10×10 даёт 5 (замыкания с обоих концов) */
+  assert.ok(Math.abs(GES.ringWidth(square) - 5) < 1e-9, 'ringWidth квадрата 10×10 = 5');
+  const chan0 = []; for (let x = 0; x <= 100; x += 5) chan0.push([0, x]);
+  for (let x = 100; x > 0; x -= 5) chan0.push([10, x]);
+  const rw = GES.ringWidth(chan0);
+  assert.ok(rw > 8 && rw < 11, `канал 100×10: средняя ширина должна быть ~10, получили ${rw.toFixed(2)}`);
+  assert.equal(GES.ringWidth([[0, 0], [1, 1]]), 0, 'вырожденное кольцо — нулевая ширина');
+});
+
+test('narrowRing: полоса сжимается к середине русла, концы стоят, воды на суше не появляется', () => {
+  /* вытянутый «канал» 100×10 с плотиной на левом краю */
+  const chan = [];
+  for (let x = 0; x <= 100; x += 5) chan.push([0, x]);
+  for (let x = 100; x > 0; x -= 5) chan.push([10, x]);
+  const inside = (r) => r.every(p => GES.pointInRing(chan, p) ||
+    Math.min(p[1], Math.abs(p[1] - 100), p[0], Math.abs(p[0] - 10)) < 1e-9);
+
+  const dry = GES.narrowRing(chan, 0.5);
+  assert.ok(inside(dry), 'засуха: вода не может вылезти за прежнее зеркало');
+  /* ширина ПОПОЛАННАЯ (углы закреплены, поэтому bounding box не годится):
+     расстояние до оси русла x=5 в среднем сечении */
+  const half = (r) => {
+    const mid = r.filter(p => p[1] > 30 && p[1] < 70);
+    return Math.max(...mid.map(p => Math.abs(p[0] - 5))) / 5;   // 1 = берег как был
+  };
+  assert.ok(half(dry) < 0.75, `полоса должна сузиться: осталось ${(half(dry) * 100).toFixed(0)}% полуширины`);
+  /* концы (плотина и устье) не уезжают вдоль русла — это и есть «не съезжает» */
+  const tipX = (r) => Math.min(...r.map(p => p[1]));
+  assert.ok(Math.abs(tipX(dry) - tipX(chan)) < 6,
+    `низье/верхье не ползёт: ${tipX(chan)} → ${tipX(dry)}`);
+  const wet = GES.narrowRing(chan, 1.5);
+  assert.ok(Math.max(...wet.map(p => p[0])) > 10.5, 'паводок: вода выходит на берега');
+  assert.ok(GES.narrowRing(chan, 1) === chan, 'w=1 — то же кольцо, без копирования');
+  for (const bad of [0, -1, NaN, 'x', undefined]){
+    assert.ok(GES.narrowRing(chan, bad).every(p => Number.isFinite(p[0])), 'мусор не даёт NaN');
+  }
+  for (const tiny of [[], [[0, 0]], [[0, 0], [1, 1]], [[0, 0], [NaN, NaN], [1, 1], [1, 0]]]){
+    assert.ok(Array.isArray(GES.narrowRing(tiny, 0.5)), 'короткое/битое кольцо — не падаем');
+  }
+});
+
+/* Реальная геометрия Перовской: серповидный залив, на нём прежние варианты
+   (масштаб вокруг точки, притягивание наружных вершин к берегу) и ломались. */
+const RES_GEO = (() => {
+  const src = fs.readFileSync(path.join(ROOT, 'reservoirs-data.js'), 'utf8');
+  const w = {}; new Function('window', src)(w);
+  return w.RESERVOIR_GEOMETRY.pero;
+})();
+
+function crossings(ring){
+  let n = 0;
+  for (let i = 0; i < ring.length; i++){
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    for (let j = i + 2; j < ring.length; j++){
+      if (i === 0 && j === ring.length - 1) continue;
+      const c = ring[j], d = ring[(j + 1) % ring.length];
+      const side = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+      if (side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0) n++;
+    }
+  }
+  return n;
+}
+
+test('shorelineRings: реальная геометрия — ни петель, ни воды на суше, ни съезда', () => {
+  const fr = GES.planarFrame(RES_GEO.n);
+  const bowl = RES_GEO.n[0].map(fr.to);
+  const distToBowl = (p) => {
+    let d = Infinity;
+    for (let i = 0, j = bowl.length - 1; i < bowl.length; j = i++){
+      const ax = bowl[j][0], ay = bowl[j][1];
+      const vx = bowl[i][0] - ax, vy = bowl[i][1] - ay;
+      const L = vx * vx + vy * vy;
+      let t = L > 0 ? ((p[0] - ax) * vx + (p[1] - ay) * vy) / L : 0;
+      t = Math.max(0, Math.min(1, t));
+      d = Math.min(d, Math.hypot(ax + vx * t - p[0], ay + vy * t - p[1]));
+    }
+    return d;
+  };
+  let prevArea = Infinity;
+  for (const w of [0.3, 0.45, 0.6, 0.8, 1, 1.2, 1.35, 1.5, 1.9]){
+    const sh = GES.shorelineRings(RES_GEO.n, w);
+    assert.equal(sh.rings.length, 1, 'w=' + w + ': колец должно остаться столько же');
+    const xy = sh.rings[0].map(fr.to);
+    assert.ok(crossings(xy) === 0, 'w=' + w + ': берег самопересекается (' + crossings(xy) + ' петель) — это и есть «шипы» на скриншоте');
+    if (w < 1){
+      let worst = 0;
+      for (const p of xy) if (!GES.pointInRing(bowl, p)) worst = Math.max(worst, distToBowl(p));
+      assert.ok(worst < 1, 'w=' + w + ': вода вылезла за прежнее зеркало на ' + worst.toFixed(1) + ' м');
+    }
+    assert.ok(Number.isFinite(sh.areaRatio) && sh.areaRatio > 0, 'w=' + w + ': площадь конечна');
+    assert.ok(Math.abs(sh.areaRatio - 1) > 1e-9 || Math.abs(w - 1) < 1e-9, 'w=' + w + ': норма — площадь как есть');
+    if (w < 1) assert.ok(sh.areaRatio < 1, 'w=' + w + ': при сжатии площадь обязана уменьшаться');
+    if (w > 1) assert.ok(sh.areaRatio > 1, 'w=' + w + ': при разливе площадь обязана расти');
+    if (w < 1) assert.ok(sh.areaRatio > prevArea - 1e-9 || prevArea === Infinity, 'монотонность по w');
+    if (w < 1) prevArea = sh.areaRatio;
+  }
+});
+
+test('shorelineRings: плотина и устье закреплены — на реальном контуре это десятки метров', () => {
+  const fr = GES.planarFrame(RES_GEO.n);
+  const base = RES_GEO.n[0];
+  const DAM = [60.67992, 28.95119];          // створ из HPPS
+  const M = 111320;
+  const mBetween = (a, b) => Math.hypot((a[0] - b[0]) * M,
+                                        (a[1] - b[1]) * M * Math.cos(60.68 * Math.PI / 180));
+  const near = (ring) => Math.min(...ring.filter(p => Number.isFinite(p[0])).map(p => mBetween(p, DAM)));
+  const damNear = near(base);
+  for (const w of [0.3, 0.5, 0.8, 1.2, 1.5]){
+    const sh = GES.shorelineRings(RES_GEO.n, w).rings[0];
+    assert.ok(near(sh) < damNear + 8,
+      `w=${w}: вода у плотины сместилась на ${(near(sh) - damNear).toFixed(1)} м — берег «съезжает» со створа`);
+  }
+  /* и верхний конец (устье затопления) не уезжает: сравниваем экстремумы по долготе */
+  const tail = (ring) => Math.max(...ring.filter(p => Number.isFinite(p[1])).map(p => p[1]));
+  const sh = GES.shorelineRings(RES_GEO.n, 0.3).rings[0];
+  assert.ok(Math.abs(tail(sh) - tail(base)) * M < 60,
+    'верх русла при сжатии не должен уезжать больше чем на пару десятков метров');
+});
+
+test('shorelineRings: мусор и пустой вход не валят схему', () => {
+  assert.deepEqual(GES.shorelineRings([], 0.7), { rings: [], areaRatio: 1 });
+  assert.deepEqual(GES.shorelineRings(null, 0.7), { rings: [], areaRatio: 1 });
+  for (const bad of [NaN, 0, -1, undefined, 'x']){
+    const sh = GES.shorelineRings(RES_GEO.n, bad);
+    assert.equal(sh.rings.length, 1);
+    assert.deepEqual(sh.rings[0], RES_GEO.n[0], 'некорректный множитель — исходное кольцо, без NaN');
+    assert.equal(sh.areaRatio, 1);
+  }
+  const flat = GES.shorelineRings([[[0, 0], [0, 1], [0, 2]]], 0.5);
+  assert.ok(Number.isFinite(flat.areaRatio), 'areaRatio конечен даже на вырожденном контуре');
+  /* одно кольцо (не список колец) тоже принимается */
+  const single = GES.shorelineRings(RES_GEO.n[0], 0.6);
+  assert.equal(single.rings.length, 1);
+  assert.ok(single.areaRatio < 1, 'плоское кольцо — то же самое, что список из него');
+});
+
+/* ---------- берег по фактической отметке («норма», режим климата) ---------- */
+const PERO = { nmu: 17.5, umo: 12, areaNMU: 0.03, totalVolume: 0.00008, usefulVolume: 0.00002,
+               capacityMW: 0.15, head: 5.5, eff: 0.82, flowDir: 295, floodAmp: 3.0, droughtMin: 0.15 };
+
+test('shoreWidthFromLevel: берег по фактической отметке, а не по цвету', () => {
+  const f = GES.shoreWidthFromLevel;
+  assert.equal(typeof f, 'function', 'shoreWidthFromLevel не экспортируется');
+  const band = PERO.nmu - PERO.umo;
+  const at = f(PERO, PERO.nmu);
+  assert.equal(at.dh, 0, 'на НПУ поправка нулевая');
+  assert.equal(at.base, 1, 'на НПУ берег = снимок при НПВ');
+  assert.ok(Math.abs(f(PERO, PERO.nmu - band / 2).base - 0.5) < 1e-12,
+    'середина диапазона — половина ширины полосы');
+  assert.equal(f(PERO, PERO.umo).base, GES.SHORE_CLAMP.width[0], 'на УМО чаша не исчезает совсем');
+  assert.equal(f(PERO, PERO.umo - 5).base, GES.SHORE_CLAMP.width[0], 'ниже УМО дальше не сжимается');
+  /* в «норме» зеркало не вылезает за снимок при НПВ — только внутри (v54) */
+  assert.equal(f(PERO, PERO.nmu + 3).base, 1, 'выше НПУ база не раздувается');
+  /* монотонность: чем ниже вода, тем уже полоса */
+  const ladder = [17.5, 17, 16, 15, 14, 13, 12].map(v => f(PERO, v).base);
+  for (let i = 1; i < ladder.length; i++) assert.ok(ladder[i] <= ladder[i-1] + 1e-12, 'не монотонно: ' + ladder.join(' '));
+  /* мусор не роняет и не даёт NaN */
+  for (const bad of [NaN, undefined, null, Infinity, 'мм']){
+    const r = f(PERO, bad);
+    assert.ok(isFinite(r.base) && r.base > 0, 'не конечно при level=' + bad);
+    assert.equal(r.base, 1, 'на мусоре — без поправки: level=' + bad);
+  }
+  assert.equal(f(null, 15).base, 1, 'без паспорта — без поправки');
+  assert.equal(f({ nmu: 17.5 }, 15).base, 1, 'без УМО — без поправки');
+});
+
+test('applyReservoirScenario в «норме» двигает берег, не трогая ряды', () => {
+  const n = 4;
+  const res = { level: [17.5, 16.2, 13.4, 12.0], area: [0.03, 0.024, 0.012, 0.002],
+                power: [0.1, 0.1, 0.1, 0.1], lf: [0.5, 0.5, 0.5, 0.5], flow: [1, 1, 1, 1],
+                spill: [0, 0, 0, 0], head: [5, 5, 5, 5], kwh: 0 };
+  const times = ['2025-01-15', '2025-04-15', '2041-07-15', '2041-08-15'];
+  const out = GES.applyReservoirScenario(res, PERO, times, 'normal');
+  assert.notEqual(out, res, 'ожидалась копия');
+  assert.equal(out.shoreWidth.length, n);
+  assert.ok(out.shoreWidth[0] > 0.999, 'на НПУ берег не должен уползать: ' + out.shoreWidth[0]);
+  assert.ok(out.shoreWidth[2] < 0.7, 'июльская межень обязана сжимать зеркало: ' + out.shoreWidth[2]);
+  assert.deepEqual(out.shoreScheme, [1, 1, 1, 1], 'в «норме» множителя года быть не должно');
+  assert.ok(out.shoreWidth[2] < out.shoreWidth[1], 'ряд берега не монотонен по отметке');
+  /* уровень/площадь климатического ряда — как их посчитал simulate */
+  assert.deepEqual(out.level, res.level, 'в «норме» ряд отметок править нельзя');
+  assert.deepEqual(out.area, res.area, 'в «норме» ряд площади править нельзя');
+  assert.equal(out.scenarioWater, 'normal');
+  /* прорыв и сброс живут своими сценариями — их зеркало не трогаем */
+  for (const scen of ['dam_break', 'release']){
+    assert.equal(GES.applyReservoirScenario(res, PERO, times, scen), res, scen + ' вернул изменённый ряд');
+  }
+  /* схема «паводок»/«засуха» осталась как была */
+  const fl = GES.applyReservoirScenario(res, PERO, times, 'flood');
+  assert.ok(fl.shoreWidth[0] > out.shoreWidth[0], 'паводок должен раздувать берег против нормы: ' +
+    fl.shoreWidth[0] + ' против ' + out.shoreWidth[0]);
+  assert.ok(Math.abs(fl.level[0] - 17.5) > 1e-9 || fl.level[0] === 17.5, 'паводок не сдвинул отметку');
+  assert.ok(fl.level[0] <= PERO.nmu + 1e-9, 'отметка выше НПУ не вылезает');
+});
